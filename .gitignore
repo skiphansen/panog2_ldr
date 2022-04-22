@@ -1,0 +1,14 @@
+*.pyc
+*.log
+*.vcd
+*.a
+*_bd.bmm
+*.lst
+build/
+lib/
+obj/
+obj_verilated/
+verilated/
+ise/work/
+fpga/firmware.mem
+fpga/build/

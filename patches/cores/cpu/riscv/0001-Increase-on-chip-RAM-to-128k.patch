@@ -1,0 +1,89 @@
+From de820f078c075250303ea85b730e9b3df9a7c2f4 Mon Sep 17 00:00:00 2001
+From: Skip Hansen <skip@gfrn.org>
+Date: Wed, 8 Apr 2020 09:49:11 -0700
+Subject: [PATCH] Increase on chip RAM to 128k.
+
+---
+ top_tcm_wrapper/dport_mux.v   |  2 +-
+ top_tcm_wrapper/tcm_mem.v     |  4 ++--
+ top_tcm_wrapper/tcm_mem_ram.v | 10 +++++++---
+ 3 files changed, 10 insertions(+), 6 deletions(-)
+ mode change 100644 => 100755 top_tcm_wrapper/dport_mux.v
+ mode change 100644 => 100755 top_tcm_wrapper/tcm_mem.v
+
+diff --git a/top_tcm_wrapper/dport_mux.v b/top_tcm_wrapper/dport_mux.v
+old mode 100644
+new mode 100755
+index 0a0ecbb..cea3caa
+--- a/top_tcm_wrapper/dport_mux.v
++++ b/top_tcm_wrapper/dport_mux.v
+@@ -110,7 +110,7 @@ module dport_mux
+ wire hold_w;
+ 
+ /* verilator lint_off UNSIGNED */
+-wire tcm_access_w = (mem_addr_i >= TCM_MEM_BASE && mem_addr_i < (TCM_MEM_BASE + 32'd65536));
++wire tcm_access_w = (mem_addr_i >= TCM_MEM_BASE && mem_addr_i < (TCM_MEM_BASE + 32'd131072));
+ /* verilator lint_on UNSIGNED */
+ 
+ reg       tcm_access_q;
+diff --git a/top_tcm_wrapper/tcm_mem.v b/top_tcm_wrapper/tcm_mem.v
+old mode 100644
+new mode 100755
+index f2eb6ae..59170ee
+--- a/top_tcm_wrapper/tcm_mem.v
++++ b/top_tcm_wrapper/tcm_mem.v
+@@ -165,7 +165,7 @@ u_conv
+ //-------------------------------------------------------------
+ 
+ // Mux access to the 2nd port between external access and CPU data access
+-wire [13:0] muxed_addr_w = ext_accept_w ? ext_addr_w[15:2] : mem_d_addr_i[15:2];
++wire [14:0] muxed_addr_w = ext_accept_w ? ext_addr_w[16:2] : mem_d_addr_i[16:2];
+ wire [31:0] muxed_data_w = ext_accept_w ? ext_write_data_w : mem_d_data_wr_i;
+ wire [3:0]  muxed_wr_w   = ext_accept_w ? ext_wr_w         : mem_d_wr_i;
+ wire [31:0] data_r_w;
+@@ -176,7 +176,7 @@ u_ram
+     // Instruction fetch
+      .clk0_i(clk_i)
+     ,.rst0_i(rst_i)
+-    ,.addr0_i(mem_i_pc_i[15:2])
++    ,.addr0_i(mem_i_pc_i[16:2])
+     ,.data0_i(32'b0)
+     ,.wr0_i(4'b0)
+ 
+diff --git a/top_tcm_wrapper/tcm_mem_ram.v b/top_tcm_wrapper/tcm_mem_ram.v
+index c641bf2..6c72a55 100644
+--- a/top_tcm_wrapper/tcm_mem_ram.v
++++ b/top_tcm_wrapper/tcm_mem_ram.v
+@@ -47,12 +47,12 @@ module tcm_mem_ram
+     // Inputs
+      input           clk0_i
+     ,input           rst0_i
+-    ,input  [ 13:0]  addr0_i
++    ,input  [ 14:0]  addr0_i
+     ,input  [ 31:0]  data0_i
+     ,input  [  3:0]  wr0_i
+     ,input           clk1_i
+     ,input           rst1_i
+-    ,input  [ 13:0]  addr1_i
++    ,input  [ 14:0]  addr1_i
+     ,input  [ 31:0]  data1_i
+     ,input  [  3:0]  wr1_i
+ 
+@@ -68,9 +68,13 @@ module tcm_mem_ram
+ // Mode: Read First
+ //-----------------------------------------------------------------
+ /* verilator lint_off MULTIDRIVEN */
+-reg [31:0]   ram [16383:0] /*verilator public*/;
++reg [31:0]   ram [32767:0] /*verilator public*/;
+ /* verilator lint_on MULTIDRIVEN */
+ 
++initial begin
++   $readmemh("firmware.mem", ram, 0, 32767);
++end
++
+ reg [31:0] ram_read0_q;
+ reg [31:0] ram_read1_q;
+ 
+-- 
+2.17.1
+

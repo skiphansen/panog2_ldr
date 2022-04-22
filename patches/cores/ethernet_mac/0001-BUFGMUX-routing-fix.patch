@@ -1,0 +1,52 @@
+Index: e/xilinx/mii_gmii_io_spartan6.vhd
+===================================================================
+--- e.orig/xilinx/mii_gmii_io_spartan6.vhd
++++ e/xilinx/mii_gmii_io_spartan6.vhd
+@@ -17,6 +17,7 @@ architecture spartan_6 of mii_gmii_io is
+ 	signal clock_tx_inv     : std_ulogic := '1';
+ 	signal clock_mii_rx_io  : std_ulogic := '0';
+ 	signal clock_mii_rx_div : std_ulogic;
++        signal clock_tx_int     : std_ulogic;
+ 
+ 	-- IDELAY_VALUE applied to the inputs using IODELAY2
+ 	-- This will need fine-tuning depending on the exact device and the location of the IO pins
+@@ -40,16 +41,29 @@ begin
+ 	-- Asynchronous clock switch-over is required: the MII TX_CLK might not be running any more when
+ 	-- switching to GMII. This means that glitches can occur on the clock and the complete MAC has to 
+ 	-- be reset after a speed change.
+-	clock_tx_BUFGMUX_inst : BUFGMUX
+-		generic map(
+-			CLK_SEL_TYPE => "ASYNC"     -- Glitchles ("SYNC") or fast ("ASYNC") clock switch-over
+-		)
+-		port map(
+-			O  => clock_tx,             -- 1-bit output: Clock buffer output
+-			I0 => mii_tx_clk_i,         -- 1-bit input: Clock buffer input (S=0)
+-			I1 => clock_125_i,          -- 1-bit input: Clock buffer input (S=1)
+-			S  => gmii_active           -- 1-bit input: Clock buffer select
+-		);
++--  clock_tx_BUFGMUX_inst : BUFGMUX
++--      generic map(
++--          CLK_SEL_TYPE => "ASYNC"    -- Glitchles ("SYNC") or fast ("ASYNC") clock switch-over
++--      )
++--      port map(
++--          O  => clock_tx,             -- 1-bit output: Clock buffer output
++--          I0 => mii_tx_clk_i,         -- 1-bit input: Clock buffer input (S=0)
++--          I1 => clock_125_i,          -- 1-bit input: Clock buffer input (S=1)
++--          S  => gmii_active           -- 1-bit input: Clock buffer select
++--      );
++
++    -- Can't use a BUFGMUX on a Panologic G2 because of routing contraints.
++    -- We need access to the 125 Mhz clock for other purposes as well,
++    -- as soon as we add an input buffer for SYCCLK/Y13 the design becomes 
++    -- unroutable if we also try to use a BUFGMUX.
++
++    clock_tx_int <= clock_125_i when gmii_active = '1' else mii_tx_clk_i;
++
++    mii_tx_clk_BUFG_inst : BUFG
++        port map(
++            O => clock_tx,      -- 1-bit output: Clock buffer output
++            I => clock_tx_int   -- 1-bit input: Clock buffer input
++        );
+ 
+ 	-- Output clock only when running GMII to reduce switching noise
+ 	-- and avoid outputting a useless 25 MHz clock in MII mode.

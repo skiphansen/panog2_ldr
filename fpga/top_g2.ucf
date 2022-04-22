@@ -1,0 +1,28 @@
+# Clocks
+NET "SYSCLK" PERIOD = 125 MHz HIGH 50% | LOC = "Y13";
+
+# Flash
+NET "flash_cs_o"  LOC="T5"  | IOSTANDARD=LVCMOS33;
+NET "flash_sck_o" LOC="Y21" | IOSTANDARD=LVCMOS33;
+NET "flash_si_o"  LOC="AB20" | IOSTANDARD=LVCMOS33;
+NET "flash_so_i"  LOC="AA20" | IOSTANDARD=LVCMOS33;
+
+# serial cable connected to mini HDMI DDC signals
+NET "uart_txd_i"  LOC="AA21" | IOSTANDARD=LVTTL;        # AKA DDC2_SCK (PC->Pano)
+NET "uart_rxd_o"  LOC="AB19" | IOSTANDARD=LVTTL;        # AKA DDC2_SDA (Pano->PC)
+
+# Ethernet PHY
+NET "GMII_RST_N" LOC = R11 | IOSTANDARD = LVCMOS33;
+
+# Pano Button LED Output, Active High
+NET "led_red"               LOC = E12 | IOSTANDARD = LVCMOS33;
+NET "led_blue"              LOC = H13 | IOSTANDARD = LVCMOS33;
+NET "led_green"             LOC = F13 | IOSTANDARD = LVCMOS33;
+
+# Pano Button Input, Active Low
+NET "pano_button"           LOC = H12 | IOSTANDARD = LVCMOS33 | PULLUP;
+
+# Wolfson codec audio interface
+#NET "codec_scl" LOC = U17 | IOSTANDARD = LVCMOS33;
+#NET "codec_sda" LOC = AB17 | IOSTANDARD = LVCMOS33;
+

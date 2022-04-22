@@ -1,0 +1,28 @@
+From 56690b8790ef8b1488d506a1b024f9573493cb30 Mon Sep 17 00:00:00 2001
+From: Skip Hansen <skip@gfrn.org>
+Date: Wed, 3 Jun 2020 07:34:30 -0700
+Subject: [PATCH] Enable SUPPORT_REGFILE_XILINX.
+
+---
+ core/riscv/riscv_core.v | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+ mode change 100644 => 100755 core/riscv/riscv_core.v
+
+diff --git a/core/riscv/riscv_core.v b/core/riscv/riscv_core.v
+old mode 100644
+new mode 100755
+index 4efc244..11575f1
+--- a/core/riscv/riscv_core.v
++++ b/core/riscv/riscv_core.v
+@@ -49,7 +49,7 @@ module riscv_core
+     ,parameter SUPPORT_MMU      = 0
+     ,parameter SUPPORT_LOAD_BYPASS = 1
+     ,parameter SUPPORT_MUL_BYPASS = 1
+-    ,parameter SUPPORT_REGFILE_XILINX = 0
++    ,parameter SUPPORT_REGFILE_XILINX = 1
+     ,parameter EXTRA_DECODE_STAGE = 0
+     ,parameter MEM_CACHE_ADDR_MIN = 32'h80000000
+     ,parameter MEM_CACHE_ADDR_MAX = 32'h8fffffff
+-- 
+2.17.1
+

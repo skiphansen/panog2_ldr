@@ -1,0 +1,86 @@
+From 33b61656e9789455bb97fd81b7b22b3a3ae1e65d Mon Sep 17 00:00:00 2001
+From: Skip Hansen <skip@gfrn.org>
+Date: Wed, 8 Apr 2020 10:24:13 -0700
+Subject: [PATCH] Fix build for NO_SYS=1.
+
+---
+ src/core/{init.c => lwip_init.c}   | 0
+ src/include/lwip/priv/api_msg.h    | 4 +++-
+ src/include/lwip/priv/tcpip_priv.h | 4 ++--
+ src/include/lwip/tcpip.h           | 4 ++--
+ 4 files changed, 7 insertions(+), 5 deletions(-)
+ rename src/core/{init.c => lwip_init.c} (100%)
+ mode change 100644 => 100755 src/include/lwip/priv/api_msg.h
+ mode change 100644 => 100755 src/include/lwip/priv/tcpip_priv.h
+ mode change 100644 => 100755 src/include/lwip/tcpip.h
+
+diff --git a/src/core/init.c b/src/core/lwip_init.c
+similarity index 100%
+rename from src/core/init.c
+rename to src/core/lwip_init.c
+diff --git a/src/include/lwip/priv/api_msg.h b/src/include/lwip/priv/api_msg.h
+old mode 100644
+new mode 100755
+index 9e8ffc9e..3c330784
+--- a/src/include/lwip/priv/api_msg.h
++++ b/src/include/lwip/priv/api_msg.h
+@@ -92,7 +92,9 @@ struct api_msg {
+     } n;
+     /** used for lwip_netconn_do_bind and lwip_netconn_do_connect */
+     struct {
+-      API_MSG_M_DEF_C(ip_addr_t, ipaddr);
++      const ip_addr_t *ipaddr1;
++       ip_addr_t ipaddr2;
++       API_MSG_M_DEF_C(ip_addr_t, ipaddr);
+       u16_t port;
+       u8_t if_idx;
+     } bc;
+diff --git a/src/include/lwip/priv/tcpip_priv.h b/src/include/lwip/priv/tcpip_priv.h
+old mode 100644
+new mode 100755
+index bfa88ff6..f79948c3
+--- a/src/include/lwip/priv/tcpip_priv.h
++++ b/src/include/lwip/priv/tcpip_priv.h
+@@ -39,7 +39,7 @@
+ 
+ #include "lwip/opt.h"
+ 
+-#if !NO_SYS /* don't build if not configured for use in lwipopts.h */
++// #if !NO_SYS /* don't build if not configured for use in lwipopts.h */
+ 
+ #include "lwip/tcpip.h"
+ #include "lwip/sys.h"
+@@ -171,6 +171,6 @@ struct tcpip_msg {
+ }
+ #endif
+ 
+-#endif /* !NO_SYS */
++// #endif /* !NO_SYS */
+ 
+ #endif /* LWIP_HDR_TCPIP_PRIV_H */
+diff --git a/src/include/lwip/tcpip.h b/src/include/lwip/tcpip.h
+old mode 100644
+new mode 100755
+index 30ce4fef..1a092e88
+--- a/src/include/lwip/tcpip.h
++++ b/src/include/lwip/tcpip.h
+@@ -39,7 +39,7 @@
+ 
+ #include "lwip/opt.h"
+ 
+-#if !NO_SYS /* don't build if not configured for use in lwipopts.h */
++// #if !NO_SYS /* don't build if not configured for use in lwipopts.h */
+ 
+ #include "lwip/err.h"
+ #include "lwip/timeouts.h"
+@@ -109,6 +109,6 @@ int tcpip_thread_poll_one(void);
+ }
+ #endif
+ 
+-#endif /* !NO_SYS */
++// #endif /* !NO_SYS */
+ 
+ #endif /* LWIP_HDR_TCPIP_H */
+-- 
+2.17.1
+
