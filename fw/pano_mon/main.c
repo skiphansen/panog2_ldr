@@ -1,3 +1,21 @@
+/*
+ *  Copyright (C) 2022  Skip Hansen
+ * 
+ *  This program is free software; you can redistribute it and/or modify it
+ *  under the terms and conditions of the GNU General Public License,
+ *  version 2, as published by the Free Software Foundation.
+ *
+ *  This program is distributed in the hope it will be useful, but WITHOUT
+ *  ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ *  FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ *  more details.
+ *
+ *  You should have received a copy of the GNU General Public License along
+ *  with this program; if not, write to the Free Software Foundation, Inc.,
+ *  51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
+ *
+ */
+
 #include <stdio.h>
 #include <stdint.h>
 #include <unistd.h>
@@ -8,9 +26,6 @@
 #include "gpio_defs.h"
 #include "timer.h"
 #include "pano_io.h"
-#define DEBUG_LOGGING         1
-// #define VERBOSE_DEBUG_LOGGING 1
-#include "log.h"
 #include "eth_io.h"
 
 /* lwIP core includes */
@@ -35,16 +50,10 @@
 /* lwIP netif includes */
 #include "lwip/etharp.h"
 #include "netif/ethernet.h"
+#include "tftp_ldr.h"
 
 #define REG_WR(reg, wr_data)       *((volatile uint32_t *)(reg)) = (wr_data)
 #define REG_RD(reg)                *((volatile uint32_t *)(reg))
-
-bool ButtonJustPressed(void);
-void ClearRxFifo(void);
-void init_default_netif(void);
-void pano_netif_poll(void);
-void netif_init(void);
-err_t pano_netif_output(struct netif *netif, struct pbuf *p);
 
 #define MAX_ETH_FRAME_LEN     1518
 int gRxCount;
@@ -55,6 +64,15 @@ struct netif gNetif;
 struct tcp_pcb *gTCP_pcb;
 bool gWelcomeSent;
 bool gSendRxBuf;
+tftp_ldr_internal gTftp;
+char gTemp[1024];
+
+bool ButtonJustPressed(void);
+void ClearRxFifo(void);
+void init_default_netif(void);
+void pano_netif_poll(void);
+void netif_init(void);
+err_t pano_netif_output(struct netif *netif, struct pbuf *p);
 
 //-----------------------------------------------------------------
 // main
@@ -71,8 +89,9 @@ int main(int argc, char *argv[])
     uint8_t Byte;
     uint16_t Count;
     bool bHaveIP = false;
+    bool bRanTest = false;
 
-    ALOG_R("Pano G2 TFTP loader ver 0.1 compiled " __DATE__ " " __TIME__ "\n");
+    ALOG_R("PanoMon ver 0.1 compiled " __DATE__ " " __TIME__ "\n");
 
 // Set LED GPIO's to output
     Temp = REG_RD(GPIO_BASE + GPIO_DIRECTION);
@@ -152,6 +171,16 @@ int main(int argc, char *argv[])
              Led = GPIO_BIT_RED_LED;
              break;
        }
+
+       if(bHaveIP && !bRanTest) {
+          bRanTest = true;
+          strcpy(gTftp.Filename,"tftp_ldr.h");
+          ipaddr_aton("192.168.123.170",&gTftp.ServerIP);
+          gTftp.MaxBytes = sizeof(gTemp);
+          gTftp.Ram = gTemp;
+          gTftp.TransferType = TFTP_TYPE_RAM;
+          ldr_tftp_init(&gTftp);
+       }
     }
 
     return 0;
@@ -182,14 +211,14 @@ void ClearRxFifo()
    uint8_t Byte;
 
    if(!(ETH_STATUS & ETH_STATUS_RXEMPTY)) {
-      ELOG("Clearing Rx FIFO\n");
+      LOG("Clearing Rx FIFO\n");
       for(i = 0; i < 2048; i++) {
          if(ETH_STATUS & ETH_STATUS_RXEMPTY) {
             break;
          }
          gRxBuf[i % MAX_ETH_FRAME_LEN] = ETH_RX();
       }
-      ELOG("FIFO %scleared after %d reads\n",i == 2048 ? "not " : "",i);
+      LOG("FIFO %scleared after %d reads\n",i == 2048 ? "not " : "",i);
    }
 }
 
@@ -252,7 +281,7 @@ void init_default_netif()
       }
       gNetif.name[0] = 'e';
       gNetif.name[1] = 't';
-      gNetif.hostname = "pano_usb_sniffer";
+      gNetif.hostname = "pano_mon";
       netif_set_default(&gNetif);
       netif_set_up(&gNetif);
       if((Err = dhcp_start(&gNetif)) != ERR_OK) {

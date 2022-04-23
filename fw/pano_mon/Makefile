@@ -1,12 +1,16 @@
 include ../../project.mk
 
-TARGET       = lwip_test
+TARGET       = pano_mon
 
 # source to include
 SRC_DIR      = .
 SRC_DIR     += $(CORES_DIR)/core_soc/src_c
 SRC_DIR     += $(PANO_FW_DIR)/lib/libstd
 EXTRA_SRC   += $(PANO_FW_DIR)/common/log.c
+# tftp
+TFTP_DIR     = $(abspath $(LWIP_SRC_DIR)/apps/tftp)
+EXTRA_SRC   += $(TFTP_DIR)/tftp.c
+INCLUDE_PATH += $(TFTP_DIR)
 
 PROJECT_DIR  := $(abspath .)
 INCLUDE_PATH += ../include
