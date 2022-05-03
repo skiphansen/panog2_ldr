@@ -27,6 +27,8 @@
 #include "timer.h"
 #include "pano_io.h"
 #include "eth_io.h"
+#include "spi_lite.h"
+#include "spi_drv.h"
 
 /* lwIP core includes */
 #include "lwip/opt.h"
@@ -95,13 +97,41 @@ int main(int argc, char *argv[])
 
 // Set LED GPIO's to output
     Temp = REG_RD(GPIO_BASE + GPIO_DIRECTION);
-    Temp |= GPIO_BIT_RED_LED|GPIO_BIT_GREEN_LED|GPIO_BIT_BLUE_LED;
+    Temp |= GPIO_BIT_RED_LED|GPIO_BIT_GREEN_LED|GPIO_BIT_BLUE_LED | 0x40;
     REG_WR(GPIO_BASE + GPIO_DIRECTION,Temp);
     Led = GPIO_BIT_RED_LED;
+
+    spi_init(CONFIG_SPILITE_BASE);
+    spi_chip_init();
+#if 0
+    {
+       #define TEST_ADR    0x8c0000
+       int i;
+
+       spi_read(TEST_ADR,gTemp,32);
+       LOG("Init data:\n");
+       LOG_HEX(gTemp,32);
+
+       spi_erase(TEST_ADR, 256*1024);
+       spi_read(TEST_ADR,gTemp,32);
+       LOG("After erase:\n");
+       LOG_HEX(gTemp,32);
+
+       for(i = 0; i < 32; i++) {
+          gTemp[i] = (char) i;
+       }
+       spi_write(TEST_ADR,gTemp,32);
+
+       spi_read(TEST_ADR,gTemp,32);
+       LOG("after read:\n");
+       LOG_HEX(gTemp,32);
+    }
+#endif
 
     lwip_init();
     init_default_netif();
     ClearRxFifo();
+
 
     for(; ; ) {
        NewEthStatus = ETH_STATUS & (ETH_STATUS_LINK_UP | ETH_STATUS_LINK_SPEED);
@@ -181,6 +211,7 @@ int main(int argc, char *argv[])
           gTftp.TransferType = TFTP_TYPE_RAM;
           ldr_tftp_init(&gTftp);
        }
+       ButtonJustPressed();
     }
 
     return 0;
@@ -198,6 +229,14 @@ bool ButtonJustPressed()
          printf("Pano button pressed\n");
          Ret = 1;
       }
+ // start golden bitstream
+    LOG("Attempting to switch to the golden bit stream\n");
+//     REG_WR(GPIO_BASE + GPIO_OUTPUT,0x80);
+    REG_WR(GPIO_BASE + BOOT_SPI_ADR,0x040000);
+    LOG("Address read back 0x%x\n",REG_RD(GPIO_BASE + BOOT_SPI_ADR));
+    REG_WR(GPIO_BASE + REBOOT_ADR,1);
+    LOG("Rebooting\n");
+    REG_WR(GPIO_BASE + REBOOT_ADR,0);
    }
    ButtonLast = Temp;
 

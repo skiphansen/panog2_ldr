@@ -16,11 +16,16 @@ SRC_DIR      += $(CORES_DIR)/ethernet_mac
 SRC_DIR      += $(CORES_DIR)/ethernet_mac/xilinx
 SRC_DIR      += $(CORES_DIR)/ethernet_mac/xilinx/ipcore_dir
 SRC_DIR      += $(PANO_CORES_DIR)/g2/ethernet_mac
+SRC_DIR      += $(PANO_CORES_DIR)/g2/multiboot
 EXCLUDE_SRC  += $(CORES_DIR)/ethernet_mac/ethernet_mac_tb.vhd
 EXTRA_VFLAGS += INCLUDE_ETHERNET=1
 else
 EXCLUDE_SRC += $(abspath ./eth_axi4lite.v)
 endif
+
+EXCLUDE_SRC  += $(CORES_DIR)/core_soc/src_v/core_soc.v
+EXCLUDE_SRC  += $(CORES_DIR)/core_soc/src_v/gpio.v
+EXCLUDE_SRC  += $(CORES_DIR)/core_soc/src_v/gpio_defs.v
 
 BSCAN_SPI_DIR = $(PANO_CORES_DIR)/xc3sprog
 

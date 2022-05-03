@@ -60,6 +60,8 @@ module fpga_top
     ,output          uart_tx_o
     ,output [ 31:0]  gpio_output_o
     ,output [ 31:0]  gpio_output_enable_o
+    ,output [ 23:0]  boot_spi_adr_o
+    ,output          reboot_o
 
 `ifdef INCLUDE_ETHERNET
      // MII (Media-independent interface)
@@ -465,6 +467,8 @@ u_soc
     ,.uart_tx_o(uart_tx_o)
     ,.gpio_output_o(gpio_output_o)
     ,.gpio_output_enable_o(gpio_output_enable_o)
+    ,.boot_spi_adr_o(boot_spi_adr_o)
+    ,.reboot_o(reboot_o)
 
     ,.ext1_cfg_awvalid_o(ext1_cfg_awvalid_w)
     ,.ext1_cfg_awaddr_o(ext1_cfg_awaddr_w)
@@ -518,7 +522,6 @@ always @(posedge clk_i or posedge rst_i)
 
 assign rst_cpu_w       = rst_cpu_r;
 assign cpu_intr_w      = {31'b0, soc_intr_w};
-
 
 `ifdef INCLUDE_ETHERNET
 eth_axi4lite u_eth (

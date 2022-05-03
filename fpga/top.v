@@ -64,7 +64,7 @@ PLL_BASE
       .CLKOUT0_DIVIDE         (15),
       .CLKOUT0_DUTY_CYCLE     (0.500),
       .CLKOUT0_PHASE          (0.000),
-      .CLKOUT1_DIVIDE         (25),
+      .CLKOUT1_DIVIDE         (30),
       .CLKOUT1_DUTY_CYCLE     (0.500),
       .CLKOUT1_PHASE          (0.000)
     )
@@ -72,7 +72,7 @@ PLL_BASE
       // Output clocks
      (.CLKFBOUT              (clkfbout),
       .CLKOUT0               (clkout50),
-      .CLKOUT1               (clkout24),
+      .CLKOUT1               (clkout20),
       .CLKOUT2               (),
       .CLKOUT3               (),
       .CLKOUT4               (),
@@ -95,20 +95,9 @@ BUFG clk50_buf
   (.O (clk50),
    .I (clkout50));
 
-BUFG clk24_buf
-(.O (mhz24_buf),
- .I (clkout24));
-
-ODDR2 clkout1_buf (
-  .S(1'b0),
-  .R(1'b0),
-  .D0(1'b1),
-  .D1(1'b0),
-  .C0(mhz24_buf),
-  .C1(!mhz24_buf),
-  .CE(1'b1),
-  .Q(usb_clk)
-);
+BUFG clk20_buf
+(.O (clk20),
+ .I (clkout20));
 
 //-----------------------------------------------------------------
 // Reset
@@ -136,6 +125,7 @@ wire [7:0]  spi_cs_w;
 wire [31:0] gpio_in_w;
 wire [31:0] gpio_out_w;
 wire [31:0] gpio_out_en_w;
+wire [23:0] boot_spi_adr_w;
 
 fpga_top
 #(
@@ -164,6 +154,8 @@ u_top
     ,.gpio_input_i(gpio_in_w)
     ,.gpio_output_o(gpio_out_w)
     ,.gpio_output_enable_o(gpio_out_en_w)
+    ,.boot_spi_adr_o(boot_spi_adr_w)
+    ,.reboot_o(reboot_o)
 
 `ifdef INCLUDE_ETHERNET
     // MII (Media-independent interface)
@@ -205,6 +197,7 @@ assign spi_so_w    = flash_so_i;
 // 4: In/out - blue LED
 // 5: Wolfson codec SDA
 // 6: Wolfson codec SCL
+// 7: GMII reset
 // 9...31: Not implmented
 //-----------------------------------------------------------------
 
@@ -258,6 +251,18 @@ assign uart_rxd_o  = txd_q;
 
 // Must remove reset from the Ethernet Phy for 125 Mhz input clock.
 // See https://github.com/tomverbeure/panologic-g2
-assign GMII_RST_N = 1'b1;
+assign GMII_RST_N = !gpio_out_w[7];
+
+//-----------------------------------------------------------------
+// Boot another bitstream
+//-----------------------------------------------------------------
+
+multiboot u_boot
+(
+    .clk(clk20)
+    ,.rst(rst)
+    ,.boot(reboot_o)
+    ,.boot_spi_adr(boot_spi_adr_w)
+);
 
 endmodule

@@ -29,12 +29,12 @@
 
 #include <stdio.h>
 #include <stdbool.h>
+#include <string.h>
 
 #include "lwip/apps/tftp_client.h"
 #include "lwip/apps/tftp_server.h"
 #include "tftp_ldr.h"
-
-#include <string.h>
+#include "spi_drv.h"
 
 static void *tftp_open(const char *p,const char *Mode,u8_t bWrite)
 {
@@ -73,16 +73,22 @@ static int tftp_write(void *handle, struct pbuf *pBuf)
       switch(p->TransferType) {
          case TFTP_TYPE_RAM:
             memcpy(&p->Ram[p->BytesTransfered],pBuf->payload,BufLen);
-            p->BytesTransfered += BufLen;
-            Len += BufLen;
             break;
 
          case TFTP_TYPE_FLASH:
+            spi_write(p->FlashAdr + p->BytesTransfered,pBuf->payload,BufLen);
+            break;
+
          default:
             ELOG("Invalid TransferType %d\n",p->TransferType);
+            Ret = -1;
             break;
       }
-      pBuf = pBuf->next;
+      if(Ret == 0) {
+         pBuf = pBuf->next;
+         p->BytesTransfered += BufLen;
+         Len += BufLen;
+      }
    }
 
    return Ret;
