@@ -56,6 +56,10 @@
 
 #define REG_WR(reg, wr_data)       *((volatile uint32_t *)(reg)) = (wr_data)
 #define REG_RD(reg)                *((volatile uint32_t *)(reg))
+err_t TcpRecv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err);
+void TcpError(void *arg, err_t err);
+err_t TcpPoll(void *arg, struct tcp_pcb *tpcb);
+err_t TcpSent(void *arg, struct tcp_pcb *tpcb, u16_t len);
 
 #define MAX_ETH_FRAME_LEN     1518
 int gRxCount;
@@ -75,6 +79,8 @@ void init_default_netif(void);
 void pano_netif_poll(void);
 void netif_init(void);
 err_t pano_netif_output(struct netif *netif, struct pbuf *p);
+void TcpInit(void);
+err_t TcpAccept(void *arg, struct tcp_pcb *newpcb, err_t err);
 
 //-----------------------------------------------------------------
 // main
@@ -97,7 +103,7 @@ int main(int argc, char *argv[])
 
 // Set LED GPIO's to output
     Temp = REG_RD(GPIO_BASE + GPIO_DIRECTION);
-    Temp |= GPIO_BIT_RED_LED|GPIO_BIT_GREEN_LED|GPIO_BIT_BLUE_LED | 0x40;
+    Temp |= GPIO_BIT_RED_LED|GPIO_BIT_GREEN_LED|GPIO_BIT_BLUE_LED;
     REG_WR(GPIO_BASE + GPIO_DIRECTION,Temp);
     Led = GPIO_BIT_RED_LED;
 
@@ -130,8 +136,8 @@ int main(int argc, char *argv[])
 
     lwip_init();
     init_default_netif();
+    TcpInit();
     ClearRxFifo();
-
 
     for(; ; ) {
        NewEthStatus = ETH_STATUS & (ETH_STATUS_LINK_UP | ETH_STATUS_LINK_SPEED);
@@ -202,6 +208,7 @@ int main(int argc, char *argv[])
              break;
        }
 
+#if 0
        if(bHaveIP && !bRanTest) {
           bRanTest = true;
           strcpy(gTftp.Filename,"tftp_ldr.h");
@@ -212,6 +219,7 @@ int main(int argc, char *argv[])
           ldr_tftp_init(&gTftp);
        }
        ButtonJustPressed();
+#endif
     }
 
     return 0;
@@ -320,7 +328,7 @@ void init_default_netif()
       }
       gNetif.name[0] = 'e';
       gNetif.name[1] = 't';
-      gNetif.hostname = "pano_mon";
+      gNetif.hostname = "pano_ldr";
       netif_set_default(&gNetif);
       netif_set_up(&gNetif);
       if((Err = dhcp_start(&gNetif)) != ERR_OK) {
@@ -433,3 +441,135 @@ void pano_netif_poll()
    sys_check_timeouts();
 
 }
+
+void TcpInit()
+{
+   err_t err;
+   if((gTCP_pcb = tcp_new_ip_type(IPADDR_TYPE_ANY)) != NULL) {
+
+     if((err = tcp_bind(gTCP_pcb,IP_ANY_TYPE,23)) == ERR_OK) {
+       gTCP_pcb = tcp_listen_with_backlog(gTCP_pcb,1);
+       tcp_accept(gTCP_pcb,TcpAccept);
+     }
+     else {
+        ELOG("tcp_bind failed: %d\n",err);
+     }
+   }
+   else {
+     ELOG("tcp_new_ip_type failed\n");
+   }
+}
+
+err_t TcpAccept(void *arg, struct tcp_pcb *newpcb, err_t err)
+{
+   err_t ret_err = ERR_VAL;
+   err_t Err;
+   struct tcpecho_raw_state *es;
+
+   VLOG("Called, err: %d, newpcb: %p\n",err,newpcb);
+   if(err == ERR_OK && newpcb != NULL) {
+      tcp_arg(newpcb,NULL);
+      tcp_recv(newpcb,TcpRecv);
+      tcp_err(newpcb,TcpError);
+      tcp_poll(newpcb,TcpPoll,0);
+      tcp_sent(newpcb,TcpSent);
+//       gConnected = true;
+      ret_err = ERR_OK;
+   }
+
+   return ret_err;
+}
+
+err_t TcpRecv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
+{
+   uint8_t *cp;
+   int i;
+
+   VLOG("called err: %d, p: %p\n",err,p);
+   if(p != NULL) {
+      VLOG("called err: %d, pbuf->tot_len: %d, pbuf->len: %d: \n",err,
+           p->tot_len,p->len);
+      VLOG_HEX(p->payload,p->len);
+      cp = (uint8_t *) p->payload;
+      for(i = 0; i < p->len; i++) {
+         if(*cp == 0xff) {
+         // Skip telnet command
+            LOG("Skipping Telnet command: %d, %d\n",cp[1],cp[2]);
+/* 
+Log of telnet session from Linux Ubuntu 20.04: 
+ 
+TcpRecv: Skipping Telnet command: 253, 3  do Suppress Go Ahead
+TcpRecv: Skipping Telnet command: 251, 24 will terminal type
+TcpRecv: Skipping Telnet command: 251, 31 will Negotiate About Window Size
+TcpRecv: Skipping Telnet command: 251, 32 will terminal speeda
+TcpRecv: Skipping Telnet command: 251, 33 will remote flow control
+TcpRecv: Skipping Telnet command: 251, 34 will line mode
+TcpRecv: Skipping Telnet command: 251, 39 will NEW-ENVIRON
+TcpRecv: Skipping Telnet command: 253, 5  do Status
+*/
+            cp += 3;
+            i += 2;
+            if(i + 1 > p->len) {
+               ELOG("Internal error\n");
+            }
+         }
+         else {
+            if(*cp == '\r') {
+               gSendRxBuf = true;
+            }
+
+            gRxBuf[gRxCount] = *cp++;
+            if(gRxCount < sizeof(gRxBuf) - 1) {
+               gRxCount++;
+            }
+         }
+      }
+      tcp_recved(tpcb, p->len);
+      pbuf_free(p);
+
+      VLOG("tcp_sndbuf: %d\n",tcp_sndbuf(tpcb));
+   }
+   else {
+      VLOG("connection closed\n");
+   }
+   return ERR_OK;
+}
+
+void TcpError(void *arg, err_t err)
+{
+   ELOG("Called, err: %d\n",err);
+}
+
+err_t TcpPoll(void *arg, struct tcp_pcb *tpcb)
+{
+   err_t Err;
+   static const char WelcomeMsg[] = "Pano LDR v0.01 coimpiled " \
+                                    __DATE__ " " __TIME__ "\r\n";
+
+   VLOG("tpcb: %p\n",tpcb);
+   if(!gWelcomeSent) {
+      gWelcomeSent = true;
+      LOG("calling tcp_write for welcome msg\n");
+      Err = tcp_write(tpcb,WelcomeMsg,sizeof(WelcomeMsg)-1,TCP_WRITE_FLAG_COPY);
+      if(Err != ERR_OK) {
+         ELOG("tcp_write failed - %d\n",Err);
+      }
+   }
+   else if(gSendRxBuf) {
+      gSendRxBuf = false;
+      LOG("calling tcp_write with RxBuf\n");
+      VLOG_HEX(gRxBuf,gRxCount);
+      Err = tcp_write(tpcb,gRxBuf,gRxCount,TCP_WRITE_FLAG_COPY);
+      gRxCount = 0;
+      if(Err != ERR_OK) {
+         ELOG("tcp_write failed - %d\n",Err);
+      }
+   }
+   return ERR_OK;
+}
+
+err_t TcpSent(void *arg, struct tcp_pcb *tpcb, u16_t len)
+{
+   LOG("Called, tpcb: %p, len: %d\n",tpcb,len);
+}
+
