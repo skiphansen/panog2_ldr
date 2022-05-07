@@ -8,6 +8,7 @@ SRC_DIR     += $(CORES_DIR)/core_soc/src_c
 SRC_DIR     += $(PANO_FW_DIR)/lib/libstd
 EXTRA_SRC   += $(PANO_FW_DIR)/common/log.c
 EXTRA_SRC   += $(PANO_FW_DIR)/common/spi_drv.c
+EXTRA_SRC   += $(PANO_FW_DIR)/common/cmd_parser.c
 # tftp
 TFTP_DIR     = $(abspath $(LWIP_SRC_DIR)/src/apps/tftp)
 EXTRA_SRC   += $(TFTP_DIR)/tftp.c

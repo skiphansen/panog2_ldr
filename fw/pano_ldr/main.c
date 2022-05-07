@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stdarg.h>
 
 #include "gpio_defs.h"
 #include "timer.h"
@@ -29,6 +30,7 @@
 #include "eth_io.h"
 #include "spi_lite.h"
 #include "spi_drv.h"
+#include "cmd_parser.h"
 
 /* lwIP core includes */
 #include "lwip/opt.h"
@@ -54,6 +56,16 @@
 #include "netif/ethernet.h"
 #include "tftp_ldr.h"
 
+#define NET_PRINT_BUF_LEN  120
+typedef struct {
+   char PrintBuf[NET_PRINT_BUF_LEN];
+   int Len;
+   int BytesQueued;
+   int BytesSent;
+} NetPrintInternal_t;
+
+NetPrintInternal_t gNetPrint;
+
 #define REG_WR(reg, wr_data)       *((volatile uint32_t *)(reg)) = (wr_data)
 #define REG_RD(reg)                *((volatile uint32_t *)(reg))
 err_t TcpRecv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err);
@@ -68,8 +80,8 @@ uint8_t gRxBuf[MAX_ETH_FRAME_LEN];
 uint8_t gOurMac[] = {MAC_ADR};
 struct netif gNetif;
 struct tcp_pcb *gTCP_pcb;
-bool gWelcomeSent;
-bool gSendRxBuf;
+bool gSendWelcome;
+bool gInputReady;
 tftp_ldr_internal gTftp;
 char gTemp[1024];
 
@@ -81,6 +93,20 @@ void netif_init(void);
 err_t pano_netif_output(struct netif *netif, struct pbuf *p);
 void TcpInit(void);
 err_t TcpAccept(void *arg, struct tcp_pcb *newpcb, err_t err);
+int NetPrintf(const char *Format, ...);
+int NetPrintFillPcb(struct tcp_pcb *tpcb);
+void SendPrompt(void);
+
+const char gVerStr[] = "Pano LDR v0.01 compiled " __DATE__ " " __TIME__ "\r\n";
+
+int VersionCmd(const char *CmdLine);
+
+const CommandTable_t gCmdTable[] = {
+   { "version",  "Display firmware version",NULL,0,VersionCmd},
+   { "?", NULL, NULL, CMD_FLAG_HIDE, HelpCmd},
+   { "help",NULL, NULL, CMD_FLAG_HIDE, HelpCmd},
+   { NULL}  // end of table
+};
 
 //-----------------------------------------------------------------
 // main
@@ -99,7 +125,8 @@ int main(int argc, char *argv[])
     bool bHaveIP = false;
     bool bRanTest = false;
 
-    ALOG_R("PanoMon ver 0.1 compiled " __DATE__ " " __TIME__ "\n");
+    ALOG_R(gVerStr);
+    CmdParserInit(gCmdTable,printf);
 
 // Set LED GPIO's to output
     Temp = REG_RD(GPIO_BASE + GPIO_DIRECTION);
@@ -111,7 +138,8 @@ int main(int argc, char *argv[])
     spi_chip_init();
 #if 0
     {
-       #define TEST_ADR    0x8c0000
+//       #define TEST_ADR    0x8c0000
+       #define TEST_ADR    0x380000
        int i;
 
        spi_read(TEST_ADR,gTemp,32);
@@ -134,6 +162,7 @@ int main(int argc, char *argv[])
     }
 #endif
 
+    CmdParserInit(gCmdTable,NetPrintf);
     lwip_init();
     init_default_netif();
     TcpInit();
@@ -220,6 +249,18 @@ int main(int argc, char *argv[])
        }
        ButtonJustPressed();
 #endif
+
+       if(gSendWelcome) {
+          gSendWelcome = false;
+          VersionCmd(NULL);
+          SendPrompt();
+       }
+       if(gInputReady) {
+          gInputReady = false;
+          ParseCmd(gRxBuf);
+          gRxCount = 0;
+          SendPrompt();
+       }
     }
 
     return 0;
@@ -361,8 +402,10 @@ err_t pano_netif_output(struct netif *netif, struct pbuf *p)
    struct pbuf *pNext = p->next;
    int i;
 
+#ifdef LOG_RAW_ETH
    VLOG("called tot_len: %d, len: %d: \n",p->tot_len,p->len);
    VLOG_HEX(p->payload,p->len);
+#endif
 
    ETH_TX = (uint8_t) ((TxLen >> 8) & 0xff);
    ETH_TX = (uint8_t) (TxLen & 0xff);
@@ -376,6 +419,7 @@ err_t pano_netif_output(struct netif *netif, struct pbuf *p)
          ThisBufLen = p->len;
          LOG("Next buf in chain tot_len: %d, len: %d: \n",p->tot_len,p->len);
          LOG_HEX(p->payload,p->len);
+         cp = (uint8_t *) p->payload;
       }
       ETH_TX = *cp++;
       ThisBufLen--;
@@ -421,8 +465,10 @@ void pano_netif_poll()
          }
          cp = (uint8_t *) p->payload;
 
+#ifdef LOG_RAW_ETH
          VLOG_R("Rx #%d: Read %d (0x%x) bytes from Rx Fifo:\n",gRxCount,Count,Count);
          VLOG_HEX(p->payload,p->len);
+#endif
          if(gNetif.input(p,&gNetif) != ERR_OK) {
            LWIP_DEBUGF(NETIF_DEBUG,("%s: netif input error\n",__FUNCTION__));
            pbuf_free(p);
@@ -473,7 +519,11 @@ err_t TcpAccept(void *arg, struct tcp_pcb *newpcb, err_t err)
       tcp_err(newpcb,TcpError);
       tcp_poll(newpcb,TcpPoll,0);
       tcp_sent(newpcb,TcpSent);
-//       gConnected = true;
+   // Reset everything for a new connection
+      gNetPrint.BytesSent = gNetPrint.Len = gNetPrint.BytesQueued = 0;
+      gInputReady = false;
+      gSendWelcome = true;
+      gRxCount = 0;
       ret_err = ERR_OK;
    }
 
@@ -492,21 +542,12 @@ err_t TcpRecv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
       VLOG_HEX(p->payload,p->len);
       cp = (uint8_t *) p->payload;
       for(i = 0; i < p->len; i++) {
+         if(gInputReady) {
+         // The last hasn't been processed yet
+            break;
+         }
          if(*cp == 0xff) {
          // Skip telnet command
-            LOG("Skipping Telnet command: %d, %d\n",cp[1],cp[2]);
-/* 
-Log of telnet session from Linux Ubuntu 20.04: 
- 
-TcpRecv: Skipping Telnet command: 253, 3  do Suppress Go Ahead
-TcpRecv: Skipping Telnet command: 251, 24 will terminal type
-TcpRecv: Skipping Telnet command: 251, 31 will Negotiate About Window Size
-TcpRecv: Skipping Telnet command: 251, 32 will terminal speeda
-TcpRecv: Skipping Telnet command: 251, 33 will remote flow control
-TcpRecv: Skipping Telnet command: 251, 34 will line mode
-TcpRecv: Skipping Telnet command: 251, 39 will NEW-ENVIRON
-TcpRecv: Skipping Telnet command: 253, 5  do Status
-*/
             cp += 3;
             i += 2;
             if(i + 1 > p->len) {
@@ -515,10 +556,13 @@ TcpRecv: Skipping Telnet command: 253, 5  do Status
          }
          else {
             if(*cp == '\r') {
-               gSendRxBuf = true;
+               gInputReady = true;
+               gRxBuf[gRxCount] = 0;
+            }
+            else {
+               gRxBuf[gRxCount] = *cp++;
             }
 
-            gRxBuf[gRxCount] = *cp++;
             if(gRxCount < sizeof(gRxBuf) - 1) {
                gRxCount++;
             }
@@ -530,7 +574,7 @@ TcpRecv: Skipping Telnet command: 253, 5  do Status
       VLOG("tcp_sndbuf: %d\n",tcp_sndbuf(tpcb));
    }
    else {
-      VLOG("connection closed\n");
+      LOG("connection closed\n");
    }
    return ERR_OK;
 }
@@ -543,33 +587,87 @@ void TcpError(void *arg, err_t err)
 err_t TcpPoll(void *arg, struct tcp_pcb *tpcb)
 {
    err_t Err;
-   static const char WelcomeMsg[] = "Pano LDR v0.01 coimpiled " \
-                                    __DATE__ " " __TIME__ "\r\n";
 
    VLOG("tpcb: %p\n",tpcb);
-   if(!gWelcomeSent) {
-      gWelcomeSent = true;
-      LOG("calling tcp_write for welcome msg\n");
-      Err = tcp_write(tpcb,WelcomeMsg,sizeof(WelcomeMsg)-1,TCP_WRITE_FLAG_COPY);
-      if(Err != ERR_OK) {
-         ELOG("tcp_write failed - %d\n",Err);
-      }
-   }
-   else if(gSendRxBuf) {
-      gSendRxBuf = false;
-      LOG("calling tcp_write with RxBuf\n");
-      VLOG_HEX(gRxBuf,gRxCount);
-      Err = tcp_write(tpcb,gRxBuf,gRxCount,TCP_WRITE_FLAG_COPY);
-      gRxCount = 0;
-      if(Err != ERR_OK) {
-         ELOG("tcp_write failed - %d\n",Err);
-      }
-   }
+   NetPrintFillPcb(tpcb);
    return ERR_OK;
 }
 
 err_t TcpSent(void *arg, struct tcp_pcb *tpcb, u16_t len)
 {
+   err_t Err;
+   NetPrintInternal_t *p = &gNetPrint;
+
    LOG("Called, tpcb: %p, len: %d\n",tpcb,len);
+
+   gNetPrint.BytesSent += len;
+   if(p->BytesSent == p->Len) {
+      p->BytesSent = p->Len = p->BytesQueued = 0;
+   }
+   else {
+   // Send some more
+      NetPrintFillPcb(tpcb);
+   }
+}
+
+int VersionCmd(const char *CmdLine)
+{
+   LOG("Called\n");
+   NetPrintf(gVerStr);
+}
+
+
+int NetPrintf(const char *Format, ...)
+{
+   NetPrintInternal_t *p = &gNetPrint;
+   va_list Args;
+   struct tcp_pcb *pPcb;
+
+   if(p->Len != p->BytesSent) {
+      LOG("Waiting Len %d, BytesSent %d\n",p->Len,p->BytesSent);
+      while(p->Len != p->BytesSent) {
+      // Can't while until the previous buffer has been sent.
+         pano_netif_poll();
+      }
+      LOG("Finished waiting\n");
+   }
+
+   va_start(Args,Format);
+
+   p->Len = vsnprintf(p->PrintBuf,sizeof(p->PrintBuf),Format,Args);
+   LOG("Wrote %d bytes to PrintBuf:\n",p->Len);
+   LOG_HEX(p->PrintBuf,p->Len);
+}
+
+int NetPrintFillPcb(struct tcp_pcb *tpcb)
+{
+   err_t Err;
+   NetPrintInternal_t *p = &gNetPrint;
+   int Byte2Write;
+
+   if((Byte2Write = p->Len - p->BytesQueued) > 0) {
+   // Have data to send
+      if(Byte2Write > tcp_sndbuf(tpcb)) {
+         Byte2Write = tcp_sndbuf(tpcb);
+      }
+
+      VLOG("Calling tcp_write BytesSent %d, Byte2Write %d\n",
+           p->BytesSent,Byte2Write);
+      Err = tcp_write(tpcb,&p->PrintBuf[p->BytesSent],Byte2Write,
+                      TCP_WRITE_FLAG_COPY);
+      if(Err != ERR_OK) {
+         ELOG("tcp_write failed - %d\n",Err);
+      }
+      else {
+         p->BytesQueued += Byte2Write;
+      }
+   }
+}
+
+void SendPrompt()
+{
+   LOG("Called\n");
+   NetPrintf("ldr> ");
+   LOG("Returning\n");
 }
 
