@@ -56,6 +56,9 @@
 #include "netif/ethernet.h"
 #include "tftp_ldr.h"
 
+// How often to update LEDs in milliseconds
+#define LED_BLINK_RATE     500
+
 #define NET_PRINT_BUF_LEN  120
 typedef struct {
    char PrintBuf[NET_PRINT_BUF_LEN];
@@ -65,6 +68,7 @@ typedef struct {
 } NetPrintInternal_t;
 
 NetPrintInternal_t gNetPrint;
+struct tcp_pcb *gTcpCon;
 
 #define REG_WR(reg, wr_data)       *((volatile uint32_t *)(reg)) = (wr_data)
 #define REG_RD(reg)                *((volatile uint32_t *)(reg))
@@ -96,6 +100,7 @@ err_t TcpAccept(void *arg, struct tcp_pcb *newpcb, err_t err);
 int NetPrintf(const char *Format, ...);
 int NetPrintFillPcb(struct tcp_pcb *tpcb);
 void SendPrompt(void);
+void UpdateLEDs(void);
 
 const char gVerStr[] = "Pano LDR v0.01 compiled " __DATE__ " " __TIME__ "\r\n";
 
@@ -117,7 +122,6 @@ int main(int argc, char *argv[])
     unsigned char Buf[256];
     int Id = 0;
     uint32_t Temp;
-    uint32_t Led;
     uint32_t EthStatus = 0;
     uint32_t NewEthStatus;
     uint8_t Byte;
@@ -132,7 +136,7 @@ int main(int argc, char *argv[])
     Temp = REG_RD(GPIO_BASE + GPIO_DIRECTION);
     Temp |= GPIO_BIT_RED_LED|GPIO_BIT_GREEN_LED|GPIO_BIT_BLUE_LED;
     REG_WR(GPIO_BASE + GPIO_DIRECTION,Temp);
-    Led = GPIO_BIT_RED_LED;
+    REG_WR(GPIO_BASE + GPIO_OUTPUT,0);
 
     spi_init(CONFIG_SPILITE_BASE);
     spi_chip_init();
@@ -169,6 +173,8 @@ int main(int argc, char *argv[])
     ClearRxFifo();
 
     for(; ; ) {
+       UpdateLEDs();
+       pano_netif_poll();
        NewEthStatus = ETH_STATUS & (ETH_STATUS_LINK_UP | ETH_STATUS_LINK_SPEED);
        if(EthStatus != NewEthStatus) {
           LOG_R("Ethernet Status: 0x%x\n",ETH_STATUS);
@@ -211,30 +217,6 @@ int main(int argc, char *argv[])
              bHaveIP = true;
              ALOG_R("IP address assigned %s\n",ip4addr_ntoa(&gNetif.ip_addr));
           }
-       }
-
-       REG_WR(GPIO_BASE + GPIO_OUTPUT,Led);
-       for(i = 0; i < 10; i++) {
-          pano_netif_poll();
-          timer_sleep(50);
-       }
-       REG_WR(GPIO_BASE + GPIO_OUTPUT,0);
-       for(i = 0; i < 10; i++) {
-          pano_netif_poll();
-          timer_sleep(50);
-       }
-       switch(Led) {
-          case GPIO_BIT_RED_LED:
-             Led = GPIO_BIT_GREEN_LED;
-             break;
-
-          case GPIO_BIT_GREEN_LED:
-             Led = GPIO_BIT_BLUE_LED;
-             break;
-
-          case GPIO_BIT_BLUE_LED:
-             Led = GPIO_BIT_RED_LED;
-             break;
        }
 
 #if 0
@@ -514,6 +496,10 @@ err_t TcpAccept(void *arg, struct tcp_pcb *newpcb, err_t err)
 
    VLOG("Called, err: %d, newpcb: %p\n",err,newpcb);
    if(err == ERR_OK && newpcb != NULL) {
+      if(gTcpCon != NULL) {
+         ELOG("gTcpCon not NULL\n");
+      }
+      gTcpCon = newpcb;
       tcp_arg(newpcb,NULL);
       tcp_recv(newpcb,TcpRecv);
       tcp_err(newpcb,TcpError);
@@ -621,7 +607,6 @@ int NetPrintf(const char *Format, ...)
 {
    NetPrintInternal_t *p = &gNetPrint;
    va_list Args;
-   struct tcp_pcb *pPcb;
 
    if(p->Len != p->BytesSent) {
       LOG("Waiting Len %d, BytesSent %d\n",p->Len,p->BytesSent);
@@ -637,6 +622,7 @@ int NetPrintf(const char *Format, ...)
    p->Len = vsnprintf(p->PrintBuf,sizeof(p->PrintBuf),Format,Args);
    LOG("Wrote %d bytes to PrintBuf:\n",p->Len);
    LOG_HEX(p->PrintBuf,p->Len);
+   NetPrintFillPcb(gTcpCon);
 }
 
 int NetPrintFillPcb(struct tcp_pcb *tpcb)
@@ -660,8 +646,12 @@ int NetPrintFillPcb(struct tcp_pcb *tpcb)
       }
       else {
          p->BytesQueued += Byte2Write;
+         if((Err = tcp_output(tpcb)) != ERR_OK) {
+            ELOG("tcp_output failed - %d\n",Err);
+         }
       }
    }
+   return 0;
 }
 
 void SendPrompt()
@@ -671,3 +661,39 @@ void SendPrompt()
    LOG("Returning\n");
 }
 
+void UpdateLEDs()
+{
+   static t_time LastUpdate;
+   t_time Now = timer_now();
+   static uint32_t LedCounter;
+   static uint32_t Led;
+
+   if((Now - LastUpdate) > LED_BLINK_RATE) {
+      LedCounter++;
+      if(LedCounter & 1) {
+      // A LED is on
+         switch(LedCounter >> 1) {
+            case 0:
+               Led = GPIO_BIT_RED_LED;
+               break;
+
+            case 1:
+               Led = GPIO_BIT_GREEN_LED;
+               break;
+
+            case 2:
+               Led = GPIO_BIT_BLUE_LED;
+               break;
+         }
+         REG_WR(GPIO_BASE + GPIO_OUTPUT_SET,Led);
+      }
+      else {
+      // Turn off last LED
+         REG_WR(GPIO_BASE + GPIO_OUTPUT_CLR,Led);
+         if(LedCounter >= 6) {
+            LedCounter = 0;
+         }
+      }
+      LastUpdate = Now;
+   }
+}
