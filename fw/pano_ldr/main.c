@@ -65,6 +65,7 @@ typedef struct {
    int Len;
    int BytesQueued;
    int BytesSent;
+   int BytesOnLine;
 } NetPrintInternal_t;
 
 NetPrintInternal_t gNetPrint;
@@ -98,15 +99,20 @@ err_t pano_netif_output(struct netif *netif, struct pbuf *p);
 void TcpInit(void);
 err_t TcpAccept(void *arg, struct tcp_pcb *newpcb, err_t err);
 int NetPrintf(const char *Format, ...);
+void NetPuts(char *String);
+void NetWaitBufEmpty(void);
+int NetDumpHex(void *Data,int Len,bool bWithAdr,int Adr);
 int NetPrintFillPcb(struct tcp_pcb *tpcb);
 void SendPrompt(void);
 void UpdateLEDs(void);
 
 const char gVerStr[] = "Pano LDR v0.01 compiled " __DATE__ " " __TIME__ "\r\n";
 
-int VersionCmd(const char *CmdLine);
+int VersionCmd(char *CmdLine);
+int DumpCmd(char *CmdLine);
 
 const CommandTable_t gCmdTable[] = {
+   { "Dump",  "<spi adr> <length>",NULL,0,DumpCmd},
    { "version",  "Display firmware version",NULL,0,VersionCmd},
    { "?", NULL, NULL, CMD_FLAG_HIDE, HelpCmd},
    { "help",NULL, NULL, CMD_FLAG_HIDE, HelpCmd},
@@ -596,10 +602,11 @@ err_t TcpSent(void *arg, struct tcp_pcb *tpcb, u16_t len)
    }
 }
 
-int VersionCmd(const char *CmdLine)
+int VersionCmd(char *CmdLine)
 {
-   LOG("Called\n");
    NetPrintf(gVerStr);
+
+   return RESULT_OK;
 }
 
 
@@ -608,6 +615,35 @@ int NetPrintf(const char *Format, ...)
    NetPrintInternal_t *p = &gNetPrint;
    va_list Args;
 
+   NetWaitBufEmpty();
+   va_start(Args,Format);
+
+   p->Len = vsnprintf(p->PrintBuf,sizeof(p->PrintBuf),Format,Args);
+   LOG("Wrote %d bytes to PrintBuf:\n",p->Len);
+   LOG_HEX(p->PrintBuf,p->Len);
+   NetPrintFillPcb(gTcpCon);
+}
+
+void NetPuts(char *String)
+{
+   NetPrintInternal_t *p = &gNetPrint;
+   char *cp = &p->PrintBuf[p->Len];
+
+   while(*String) {
+      if(p->Len >= sizeof(p->PrintBuf)) {
+      // Flush buffer
+         NetPrintFillPcb(gTcpCon);
+         NetWaitBufEmpty();
+         cp = p->PrintBuf;
+      }
+      *cp++ = *String++;
+      p->Len++;
+   }
+}
+
+void NetWaitBufEmpty()
+{
+   NetPrintInternal_t *p = &gNetPrint;
    if(p->Len != p->BytesSent) {
       LOG("Waiting Len %d, BytesSent %d\n",p->Len,p->BytesSent);
       while(p->Len != p->BytesSent) {
@@ -616,14 +652,48 @@ int NetPrintf(const char *Format, ...)
       }
       LOG("Finished waiting\n");
    }
-
-   va_start(Args,Format);
-
-   p->Len = vsnprintf(p->PrintBuf,sizeof(p->PrintBuf),Format,Args);
-   LOG("Wrote %d bytes to PrintBuf:\n",p->Len);
-   LOG_HEX(p->PrintBuf,p->Len);
-   NetPrintFillPcb(gTcpCon);
 }
+
+int NetDumpHex(void *Data,int Len,bool bWithAdr,int Adr)
+{
+   NetPrintInternal_t *p = &gNetPrint;
+   int i;
+   char Hex[9];
+   unsigned char *cp = Data;
+
+   NetWaitBufEmpty();
+   if(Len == 0) {
+   // Dump complete
+      if(p->BytesOnLine > 0) {
+         NetPuts("\n");
+      }
+      p->BytesOnLine = 0;
+      NetPrintFillPcb(gTcpCon);
+   }
+   else {
+      for(i = 0; i < Len; i++) {
+         if(p->BytesOnLine == 0) {
+            if(bWithAdr) {
+               sprintf(Hex,"%08X",i + Adr);
+               NetPuts(Hex);
+               NetPuts("  ");
+            }
+         }
+         else {
+            NetPuts(" ");
+         }
+
+         sprintf(Hex,"%02X",*cp++);
+         NetPuts(Hex);
+
+         if(++p->BytesOnLine == 16) {
+            NetPuts("\n");
+            p->BytesOnLine = 0;
+         }
+      }
+   }
+}
+
 
 int NetPrintFillPcb(struct tcp_pcb *tpcb)
 {
@@ -697,3 +767,53 @@ void UpdateLEDs()
       LastUpdate = Now;
    }
 }
+
+int DumpCmd(char *CmdLine)
+{
+   int Ret = RESULT_BAD_ARG;
+   uint32_t Adr;
+   uint32_t Len;
+   uint32_t Bytes2Read;
+   uint32_t BytesRead = 0;
+   char *cp = CmdLine;
+   FlashInfo_t *pFlashInfo = spi_get_flashinfo();
+   uint32_t FlashSize;
+   
+   do {
+      if(pFlashInfo == NULL) {
+         Ret = RESULT_INTERNAL_ERR;
+         break;
+      }
+      FlashSize = pFlashInfo->FlashSize;
+
+      if(HexArg(&cp,&Adr) || HexArg(&cp,&Len)) {
+         break;
+      }
+      LOG("Called: Adr 0x%x, Len 0x%x\n",Adr,Len);
+
+      if(Adr > FlashSize) {
+         NetPrintf("Error 0x%x is past end of flash (0x%x).\n",Adr,FlashSize);
+         Ret = RESULT_OK;
+         break;
+      }
+
+      if((Adr + Len) > FlashSize) {
+         Len = FlashSize - Adr;
+      }
+
+      while(BytesRead < Len) {
+         Bytes2Read = Len;
+         if(Bytes2Read > sizeof(gTemp)) {
+            Bytes2Read = sizeof(gTemp);
+         }
+         spi_read(Adr,gTemp,Bytes2Read);
+         NetDumpHex(gTemp,Bytes2Read,true,Adr);
+         Adr += Bytes2Read;
+         BytesRead += Bytes2Read;
+      }
+   } while(false);
+   NetDumpHex(NULL,0,false,0);
+   return Ret;
+}
+
+
