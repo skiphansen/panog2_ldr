@@ -105,18 +105,32 @@ int NetDumpHex(void *Data,int Len,bool bWithAdr,int Adr);
 int NetPrintFillPcb(struct tcp_pcb *tpcb);
 void SendPrompt(void);
 void UpdateLEDs(void);
+int GetAdrAndLen(char **pCmdline,uint32_t *pAdr,uint32_t *pLen);
+bool CheckEmpty(uint32_t Adr,uint32_t PageSize,uint32_t EraseSize);
 
 const char gVerStr[] = "Pano LDR v0.01 compiled " __DATE__ " " __TIME__ "\r\n";
 
-int VersionCmd(char *CmdLine);
+int BlankCmd(char *CmdLine);
+int BootCmd(char *CmdLine);
 int DumpCmd(char *CmdLine);
+int EraseCmd(char *CmdLine);
+int FlashCmd(char *CmdLine);
+int TftpCmd(char *CmdLine);
+int VerifyCmd(char *CmdLine);
+int VersionCmd(char *CmdLine);
 
 const CommandTable_t gCmdTable[] = {
-   { "Dump",  "<spi adr> <length>",NULL,0,DumpCmd},
-   { "version",  "Display firmware version",NULL,0,VersionCmd},
-   { "?", NULL, NULL, CMD_FLAG_HIDE, HelpCmd},
-   { "help",NULL, NULL, CMD_FLAG_HIDE, HelpCmd},
-   { NULL}  // end of table
+   { "blank  ",  "Find blank regions in flash",NULL,BlankCmd},
+   { "boot   ",  "<flash adr>",NULL,BootCmd},
+   { "dump   ",  "<flash adr> <length>",NULL,DumpCmd},
+   { "erase  ",  "<flash adr> <length>",NULL,EraseCmd},
+   { "flash  ",  "<filename> <flash adr>",NULL,FlashCmd},
+   { "tftp   ",  "<IP adr of tftp server>",NULL,TftpCmd},
+   { "verify ",  "<filename> <flash adr>",NULL,VerifyCmd},
+   { "version",  "Display firmware version",NULL,VersionCmd},
+   { "?", NULL, NULL, HelpCmd},
+   { "help",NULL, NULL, HelpCmd},
+   { NULL }  // end of table
 };
 
 //-----------------------------------------------------------------
@@ -136,7 +150,7 @@ int main(int argc, char *argv[])
     bool bRanTest = false;
 
     ALOG_R(gVerStr);
-    CmdParserInit(gCmdTable,printf);
+    CmdParserInit(gCmdTable,NetPrintf);
 
 // Set LED GPIO's to output
     Temp = REG_RD(GPIO_BASE + GPIO_DIRECTION);
@@ -172,7 +186,6 @@ int main(int argc, char *argv[])
     }
 #endif
 
-    CmdParserInit(gCmdTable,NetPrintf);
     lwip_init();
     init_default_netif();
     TcpInit();
@@ -245,6 +258,7 @@ int main(int argc, char *argv[])
        }
        if(gInputReady) {
           gInputReady = false;
+          LOG("Parsing command '%s'\n",gRxBuf);
           ParseCmd(gRxBuf);
           gRxCount = 0;
           SendPrompt();
@@ -602,6 +616,7 @@ err_t TcpSent(void *arg, struct tcp_pcb *tpcb, u16_t len)
    }
 }
 
+
 int VersionCmd(char *CmdLine)
 {
    NetPrintf(gVerStr);
@@ -619,8 +634,8 @@ int NetPrintf(const char *Format, ...)
    va_start(Args,Format);
 
    p->Len = vsnprintf(p->PrintBuf,sizeof(p->PrintBuf),Format,Args);
-   LOG("Wrote %d bytes to PrintBuf:\n",p->Len);
-   LOG_HEX(p->PrintBuf,p->Len);
+   LOG("Sending:\n---\n%s\n",p->PrintBuf);
+   LOG_R("\n---\n");
    NetPrintFillPcb(gTcpCon);
 }
 
@@ -674,7 +689,7 @@ int NetDumpHex(void *Data,int Len,bool bWithAdr,int Adr)
       for(i = 0; i < Len; i++) {
          if(p->BytesOnLine == 0) {
             if(bWithAdr) {
-               sprintf(Hex,"%08X",i + Adr);
+               sprintf(Hex,"%08x",i + Adr);
                NetPuts(Hex);
                NetPuts("  ");
             }
@@ -683,7 +698,7 @@ int NetDumpHex(void *Data,int Len,bool bWithAdr,int Adr)
             NetPuts(" ");
          }
 
-         sprintf(Hex,"%02X",*cp++);
+         sprintf(Hex,"%02x",*cp++);
          NetPuts(Hex);
 
          if(++p->BytesOnLine == 16) {
@@ -726,9 +741,7 @@ int NetPrintFillPcb(struct tcp_pcb *tpcb)
 
 void SendPrompt()
 {
-   LOG("Called\n");
    NetPrintf("ldr> ");
-   LOG("Returning\n");
 }
 
 void UpdateLEDs()
@@ -776,31 +789,11 @@ int DumpCmd(char *CmdLine)
    uint32_t Bytes2Read;
    uint32_t BytesRead = 0;
    char *cp = CmdLine;
-   FlashInfo_t *pFlashInfo = spi_get_flashinfo();
-   uint32_t FlashSize;
    
    do {
-      if(pFlashInfo == NULL) {
-         Ret = RESULT_INTERNAL_ERR;
+      if((Ret = GetAdrAndLen(&cp,&Adr,&Len)) != RESULT_OK) {
          break;
       }
-      FlashSize = pFlashInfo->FlashSize;
-
-      if(HexArg(&cp,&Adr) || HexArg(&cp,&Len)) {
-         break;
-      }
-      LOG("Called: Adr 0x%x, Len 0x%x\n",Adr,Len);
-
-      if(Adr > FlashSize) {
-         NetPrintf("Error 0x%x is past end of flash (0x%x).\n",Adr,FlashSize);
-         Ret = RESULT_OK;
-         break;
-      }
-
-      if((Adr + Len) > FlashSize) {
-         Len = FlashSize - Adr;
-      }
-
       while(BytesRead < Len) {
          Bytes2Read = Len;
          if(Bytes2Read > sizeof(gTemp)) {
@@ -816,4 +809,281 @@ int DumpCmd(char *CmdLine)
    return Ret;
 }
 
+int EraseCmd(char *CmdLine)
+{
+   int Ret;
+   uint32_t Adr;
+   uint32_t Len;
+   uint32_t BytesErased;
+   char *cp = CmdLine;
+   FlashInfo_t *pInfo = spi_get_flashinfo();
+   
+   do {
+      if((Ret = GetAdrAndLen(&cp,&Adr,&Len)) != RESULT_OK) {
+         break;
+      }
+      if((Adr % pInfo->EraseSize) != 0) {
+         Ret = RESULT_BAD_ARG;
+         NetPrintf("Error - address not at erase boundary\n");
+         break;
+      }
+      if((Len % pInfo->EraseSize) != 0) {
+         Ret = RESULT_BAD_ARG;
+         NetPrintf("Error - length not a multiple of the erase size\n");
+         NetPrintf("0x%x, 0x%x\n",Len,pInfo->EraseSize);
+         break;
+      }
+      LOG("Calling spi_erase Adr 0x%x Len 0x%x\n",Adr,Len);
+      spi_erase(Adr,Len);
+   } while(false);
+
+   return Ret;
+}
+
+// <filename> <flash adr>
+int FlashCmd(char *CmdLine)
+{
+   int Ret = RESULT_BAD_ARG;  // Assume the worse
+   err_t Err;
+   char *cp = CmdLine;
+   tftp_ldr_internal *p = &gTftp;
+
+   do {
+      if(!*cp) {
+      // No arguments given
+         Ret = RESULT_USAGE;
+         break;
+      }
+
+      if(p->ServerIP.addr == 0) {
+         NetPrintf("Error - TFTP server address not set\n");
+         Ret = RESULT_ERR;
+         break;
+      }
+
+      cp = Skip2Space(cp);
+      *cp++ = 0;
+
+      if(strlen(cp) > MAX_FILENAME_LEN) {
+         NetPrintf("Error - invalid filename, maximum length is %d characters\n",
+                   MAX_FILENAME_LEN);
+         Ret = RESULT_ERR;
+         break;
+      }
+      strcpy(p->Filename,CmdLine);
+
+      if(ConvertValue(&cp,&p->FlashAdr)) {
+         NetPrintf("Error - invalid address\n");
+         Ret = RESULT_ERR;
+         break;
+      }
+
+      p->MaxBytes = sizeof(gTemp);
+      p->Ram = gTemp;
+      p->TransferType = TFTP_TYPE_FLASH;
+      if((Err = ldr_tftp_init(p)) != ERR_OK) {
+         NetPrintf("tftp transfer failed %d\n",Err);
+         Ret = RESULT_ERR;
+         break;
+      }
+
+      while(p->Error == TFTP_IN_PROGRESS) {
+         pano_netif_poll();
+      }
+      if(p->ErrMsg[0]) {
+         NetPrintf("%s\n",p->ErrMsg);
+         Ret = RESULT_ERR;
+         break;
+      }
+      if(p->Error != TFTP_OK) {
+         NetPrintf("Failed %d\n",p->Error);
+         Ret = RESULT_ERR;
+         break;
+      }
+
+      NetPrintf("flashed %d bytes\n",p->BytesTransfered);
+      Ret = RESULT_OK;
+   } while(false);
+
+   return Ret;
+}
+
+int VerifyCmd(char *CmdLine)
+{
+   int Ret;
+   err_t Err;
+
+   do {
+      if(gTftp.ServerIP.addr == 0) {
+         NetPrintf("Error - TFTP server address not set\n");
+         break;
+      }
+      gTftp.MaxBytes = sizeof(gTemp);
+      gTftp.Ram = gTemp;
+      gTftp.TransferType = TFTP_TYPE_COMPARE;
+      if((Err = ldr_tftp_init(&gTftp))!= ERR_OK) {
+         NetPrintf("tftp transfer failed %d:%d\n",Err,gTftp.Error);
+      }
+   } while(false);
+
+   return Ret;
+}
+
+
+int TftpCmd(char *CmdLine)
+{
+   int Ret = RESULT_OK;
+
+   if(!*CmdLine) {
+      if(gTftp.ServerIP.addr != 0) {
+      // Address set, display it
+         NetPrintf("%s\n",ip4addr_ntoa(&gTftp.ServerIP));
+      }
+      else {
+      // display usage
+         Ret = RESULT_USAGE;
+      }
+   }
+   else if(!ipaddr_aton(CmdLine,&gTftp.ServerIP)) {
+      Ret = RESULT_BAD_ARG;
+   }
+
+   return Ret;
+}
+
+int BlankCmd(char *CmdLine)
+{
+   uint32_t Adr = 0;
+   uint32_t LastAdr = 0;
+   uint32_t FlashSize;
+   uint32_t PageSize;
+   uint32_t EraseSize;
+   FlashInfo_t *pFlashInfo = spi_get_flashinfo();
+   int Ret = RESULT_OK;
+   char *pEmpty;
+   bool bWasEmpty;
+   bool bEmpty;
+   bool bPrintStart = true;
+   
+   do {
+      if(pFlashInfo == NULL) {
+         Ret = RESULT_INTERNAL_ERR;
+         break;
+      }
+      FlashSize = pFlashInfo->FlashSize;
+      PageSize = pFlashInfo->PageSize;
+      EraseSize = pFlashInfo->EraseSize;
+      pEmpty = &gTemp[PageSize];
+      memset(pEmpty,0xff,PageSize);
+
+      spi_read(Adr,gTemp,PageSize);
+      bEmpty = CheckEmpty(Adr,PageSize,EraseSize);
+      LOG("Init bEmpty to %d\n",bEmpty);
+      bWasEmpty = bEmpty;
+
+      while(Adr < FlashSize) {
+         if(bPrintStart) {
+            bPrintStart = false;
+            LOG("0x%06x -> ",Adr);
+            NetPrintf("0x%06x -> ",Adr);
+            NetWaitBufEmpty();
+         }
+         Adr += EraseSize;
+         bEmpty = CheckEmpty(Adr,PageSize,EraseSize);
+         if(bWasEmpty != bEmpty) {
+         // End of region
+            LOG("Adr 0x%x bWasEmpty %d bEmpty %d\n",Adr,bWasEmpty,bEmpty);
+            bWasEmpty = bEmpty;
+            bPrintStart = true;
+            LOG("0x%06x - %sblank\n",Adr-1,!bWasEmpty ? "" : "not ");
+            NetPrintf("0x%06x - %sblank\n",Adr-1,!bWasEmpty ? "" : "not ");
+            LOG("Adr 0x%x bWasEmpty %d bEmpty %d\n",Adr,bWasEmpty,bEmpty);
+         }
+      }
+      LOG("0x60%x - %sblank\n",Adr-1,bWasEmpty ? "" : "not ");
+      NetPrintf("0x%06x - %sblank\n",Adr-1,bWasEmpty ? "" : "not ");
+   } while(false);
+   return Ret;
+}
+
+int BootCmd(char *CmdLine)
+{
+   int Ret;
+   uint32_t Adr;
+   char *cp = CmdLine;
+   
+   if((Ret = GetAdrAndLen(&cp,&Adr,NULL)) == RESULT_OK) {
+      NetPrintf("Booting bitstream @ 0x%x\n");
+      NetWaitBufEmpty();
+
+      REG_WR(GPIO_BASE + BOOT_SPI_ADR,Adr);
+      REG_WR(GPIO_BASE + REBOOT_ADR,1);
+      REG_WR(GPIO_BASE + REBOOT_ADR,0);
+   }
+
+   return Ret;
+}
+
+
+int GetAdrAndLen(char **pCmdline,uint32_t *pAdr,uint32_t *pLen)
+{
+   int Ret = RESULT_BAD_ARG;
+   FlashInfo_t *pFlashInfo = spi_get_flashinfo();
+   uint32_t FlashSize;
+
+   do {
+      if(pFlashInfo == NULL) {
+         Ret = RESULT_INTERNAL_ERR;
+         break;
+      }
+      FlashSize = pFlashInfo->FlashSize;
+
+      if(ConvertValue(pCmdline,pAdr)) {
+         break;
+      }
+      if(*pAdr > FlashSize) {
+         NetPrintf("Error 0x%x is past end of flash (0x%x).\n",*pAdr,FlashSize);
+         break;
+      }
+
+      if(pLen == NULL) {
+      // Len not requested
+         Ret = RESULT_OK;
+         break;
+      }
+
+      if(ConvertValue(pCmdline,pLen)) {
+         break;
+      }
+
+      if((*pAdr + *pLen) > FlashSize) {
+         *pLen = FlashSize - *pAdr;
+         NetPrintf("Note: Length reduced to 0x%x to stay within flash\n",*pLen);
+      }
+      Ret = RESULT_OK;
+   } while(false);
+
+   return Ret;
+}
+
+bool CheckEmpty(uint32_t Adr,uint32_t PageSize,uint32_t EraseSize)
+{
+   bool Ret = true;
+   int Pages2Check = EraseSize / PageSize;
+   char *pEmpty = &gTemp[PageSize];
+   int i;
+
+   for(i = 0; i < Pages2Check; i++) {
+      memset(gTemp,0xaa,PageSize);
+      spi_read(Adr,gTemp,PageSize);
+      if(memcmp(gTemp,pEmpty,PageSize) != 0) {
+      // not empty
+         Ret = false;
+         break;
+      }
+      Adr += PageSize;
+   }
+
+   return Ret;
+}
 

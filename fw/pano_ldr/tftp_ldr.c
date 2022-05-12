@@ -1,4 +1,22 @@
 /*
+ *  Copyright (C) 2022  Skip Hansen
+ * 
+ *  This program is free software; you can redistribute it and/or modify it
+ *  under the terms and conditions of the GNU General Public License,
+ *  version 2, as published by the Free Software Foundation.
+ *
+ *  This program is distributed in the hope it will be useful, but WITHOUT
+ *  ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ *  FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ *  more details.
+ *
+ *  You should have received a copy of the GNU General Public License along
+ *  with this program; if not, write to the Free Software Foundation, Inc.,
+ *  51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
+ *
+ */
+
+/*
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
  *
@@ -46,6 +64,7 @@ static void tftp_close(void* handle)
 {
    tftp_ldr_internal *p = (tftp_ldr_internal *) handle;
    LOG("%d bytes transfered\n",p->BytesTransfered);
+   p->Error = TFTP_OK;
 }
 
 // tftp put
@@ -63,33 +82,51 @@ static int tftp_write(void *handle, struct pbuf *pBuf)
    u16_t Len = 0;
    u16_t BufLen;
 
-   if((p->BytesTransfered + TotalLen) > p->MaxBytes ) {
-      ELOG("Buffer overflow\n");
-      Ret = -1;
-   }
+   LOG("called\n");
 
    while(Ret == 0 && Len < TotalLen) {
       BufLen = pBuf->len;
       switch(p->TransferType) {
          case TFTP_TYPE_RAM:
+            if((p->BytesTransfered + TotalLen) > p->MaxBytes ) {
+               p->Error = TFTP_ERR_BUF_TOO_SMALL;
+               break;
+            }
             memcpy(&p->Ram[p->BytesTransfered],pBuf->payload,BufLen);
             break;
 
          case TFTP_TYPE_FLASH:
+            LOG("flash %d @ 0x%x\n",BufLen,p->FlashAdr + p->BytesTransfered);
             spi_write(p->FlashAdr + p->BytesTransfered,pBuf->payload,BufLen);
             break;
 
+         case TFTP_TYPE_COMPARE:
+            if(BufLen > p->MaxBytes) {
+               p->Error = TFTP_ERR_BUF_TOO_SMALL;
+               break;
+            }
+            spi_read(p->FlashAdr + p->BytesTransfered,p->Ram,BufLen);
+            if(memcmp(p->Ram,pBuf->payload,BufLen) != 0) {
+               p->Error = TFTP_ERR_COMPARE_FAIL;
+            }
+            break;
+
          default:
-            ELOG("Invalid TransferType %d\n",p->TransferType);
-            Ret = -1;
+            p->Error = TFTP_ERR_INTERNAL;
             break;
       }
-      if(Ret == 0) {
+
+      if(p->Error != TFTP_IN_PROGRESS) {
+         Ret = -1;
+      }
+      else {
          pBuf = pBuf->next;
          p->BytesTransfered += BufLen;
          Len += BufLen;
       }
    }
+
+   LOG("Returning %d\n",Ret);
 
    return Ret;
 }
@@ -97,8 +134,15 @@ static int tftp_write(void *handle, struct pbuf *pBuf)
 /* For TFTP client only */
 static void tftp_error(void *handle,int err,const char *Msg,int size)
 {
-   ELOG("err %d\n");
-   LOG_HEX((void *)Msg,size);
+   tftp_ldr_internal *p = (tftp_ldr_internal *) handle;
+
+   ELOG("err %d: %s\n",err,Msg);
+   if(size > MAX_ERR_MSG_LEN) {
+      size = MAX_ERR_MSG_LEN;
+   }
+   memcpy(p->ErrMsg,Msg,size);
+   p->ErrMsg[MAX_ERR_MSG_LEN] = 0;
+   p->Error = TFTP_ERR_FAILED;
 }
 
 static const struct tftp_context tftp = {
@@ -112,18 +156,32 @@ static const struct tftp_context tftp = {
 err_t ldr_tftp_init(tftp_ldr_internal *p)
 {
    err_t Err;
-   const char *Filename = (const char *)p->Filename;
+   const char *Filename;
+   const char *TransferTypes[] = { "read", "flash","compar" };
 
    do {
+      if(p == NULL || p->ServerIP.addr == 0 || p->Filename == NULL ||
+         p->TransferType < 0 || p->TransferType > TFTP_TYPE_LAST)
+      {
+         Err = ERR_VAL;
+         break;
+      }
+      p->Error = TFTP_OK;
+
       if((Err = tftp_init_client(&tftp)) != ERR_OK) {
          ELOG("tftp_init_client failed %d\n",Err);
          break;
       }
+      Filename = (const char *) p->Filename;
+      LOG("%sing %s @ 0x%x\n",
+          TransferTypes[p->TransferType - 1],Filename,p->FlashAdr);
+
       Err = tftp_get(p,&p->ServerIP,TFTP_PORT,Filename,TFTP_MODE_OCTET);
       if(Err != ERR_OK) {
          ELOG("tftp_get failed %d\n",Err);
          break;
       }
+      p->Error = TFTP_IN_PROGRESS;
    } while(false);
 
    return Err;
