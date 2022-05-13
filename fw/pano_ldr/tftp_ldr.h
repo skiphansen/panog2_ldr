@@ -5,6 +5,9 @@
 #define VERBOSE_DEBUG_LOGGING 1
 #include "log.h"
 
+// How often to show progress during flash command
+#define PROGRESS_SIZE      (64*1024)
+
 typedef enum {
    TFTP_TYPE_RAM = 1,
    TFTP_TYPE_FLASH,
@@ -34,9 +37,11 @@ typedef struct {
    char *Ram;
    uint32_t FlashAdr;
    uint32_t LastEraseAdr;
+   uint32_t LastProgress;
    TransferResult_t Error;
 } tftp_ldr_internal;
 
 err_t ldr_tftp_init(tftp_ldr_internal *p);
+int NetPrintf(const char *Format, ...);
 
 #endif // _TFTP_LDR_H_

@@ -100,7 +100,7 @@ static int tftp_write(void *handle, struct pbuf *pBuf)
             break;
 
          case TFTP_TYPE_FLASH: {
-            FlashInfo_t *pInfo = spi_get_flashinfo();
+            const FlashInfo_t *pInfo = spi_get_flashinfo();
             uint32_t EraseSize = pInfo->EraseSize;
             uint32_t LastAdr = Adr + BufLen;
             uint32_t EraseAdr;
@@ -119,6 +119,10 @@ static int tftp_write(void *handle, struct pbuf *pBuf)
 
             LOG("flash %d @ 0x%x\n",BufLen,p->FlashAdr + p->BytesTransfered);
             spi_write(p->FlashAdr + p->BytesTransfered,pBuf->payload,BufLen);
+            if((p->BytesTransfered - p->LastProgress) > PROGRESS_SIZE) {
+               p->LastProgress += PROGRESS_SIZE;
+               NetPrintf(".");
+            }
             break;
          }
 

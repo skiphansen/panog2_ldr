@@ -102,7 +102,6 @@ void netif_init(void);
 err_t pano_netif_output(struct netif *netif, struct pbuf *p);
 void TcpInit(void);
 err_t TcpAccept(void *arg, struct tcp_pcb *newpcb, err_t err);
-int NetPrintf(const char *Format, ...);
 void NetPuts(char *String);
 void NetWaitBufEmpty(void);
 int NetDumpHex(void *Data,int Len,bool bWithAdr,int Adr);
@@ -128,7 +127,7 @@ int VersionCmd(char *CmdLine);
 const CommandTable_t gCmdTable[] = {
    { "boot   ",  "<flash adr>",NULL,BootCmd},
    { "dump   ",  "<flash adr> <length>",NULL,DumpCmd},
-   { "erase  ",  "<flash adr> <length>",NULL,EraseCmd},
+   { "erase  ",  "<start adr> <end adr>",NULL,EraseCmd},
    { "flash  ",  "<filename> <flash adr>",NULL,FlashCmd},
    { "map    ",  "Display blank regions in flash",NULL,MapCmd},
    { "tftp   ",  "<IP adr of tftp server>",NULL,TftpCmd},
@@ -832,28 +831,39 @@ int EraseCmd(char *CmdLine)
 {
    int Ret;
    uint32_t Adr;
+   uint32_t EndAdr;
    uint32_t Len;
    uint32_t BytesErased;
-   char *cp = CmdLine;
    const FlashInfo_t *pInfo = spi_get_flashinfo();
+   uint32_t EraseSize = pInfo->EraseSize;
+   char *cp = CmdLine;
    
    do {
-      if((Ret = GetAdrAndLen(&cp,&Adr,&Len)) != RESULT_OK) {
+      if((Ret = GetAdrAndLen(&cp,&Adr,NULL)) != RESULT_OK) {
          break;
       }
-      if((Adr % pInfo->EraseSize) != 0) {
-         Ret = RESULT_BAD_ARG;
+      if((Ret = GetAdrAndLen(&cp,&EndAdr,NULL)) != RESULT_OK) {
+         break;
+      }
+
+      Len = EndAdr - Adr + 1;
+      if((Adr % EraseSize) != 0) {
+         Ret = RESULT_ERR;
          NetPrintf("Error - address not at erase boundary\n");
          break;
       }
-      if((Len % pInfo->EraseSize) != 0) {
-         Ret = RESULT_BAD_ARG;
+      if((Len % EraseSize) != 0) {
+         Ret = RESULT_ERR;
          NetPrintf("Error - length not a multiple of the erase size\n");
-         NetPrintf("0x%x, 0x%x\n",Len,pInfo->EraseSize);
          break;
       }
       LOG("Calling spi_erase Adr 0x%x Len 0x%x\n",Adr,Len);
-      spi_erase(Adr,Len);
+      while(Adr < EndAdr) {
+         spi_erase(Adr,EraseSize);
+         NetPrintf(".");
+         Adr += EraseSize;
+      }
+      NetPrintf("\nErased %dK\n",Len / 1024);
    } while(false);
 
    return Ret;
@@ -882,7 +892,7 @@ int FlashCmd(char *CmdLine)
 
       Ret = TftpTranserWait(p);
       if(Ret == RESULT_OK) {
-         NetPrintf("flashed %d bytes\n",p->BytesTransfered);
+         NetPrintf("\nflashed %d bytes\n",p->BytesTransfered);
       }
    } while(false);
 
