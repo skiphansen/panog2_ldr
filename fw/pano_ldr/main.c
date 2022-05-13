@@ -116,7 +116,7 @@ int TftpTranserWait(tftp_ldr_internal *p);
 
 const char gVerStr[] = "Pano LDR v0.01 compiled " __DATE__ " " __TIME__ "\r\n";
 
-int BlankCmd(char *CmdLine);
+int MapCmd(char *CmdLine);
 int BootCmd(char *CmdLine);
 int DumpCmd(char *CmdLine);
 int EraseCmd(char *CmdLine);
@@ -126,11 +126,11 @@ int VerifyCmd(char *CmdLine);
 int VersionCmd(char *CmdLine);
 
 const CommandTable_t gCmdTable[] = {
-   { "blank  ",  "Find blank regions in flash",NULL,BlankCmd},
    { "boot   ",  "<flash adr>",NULL,BootCmd},
    { "dump   ",  "<flash adr> <length>",NULL,DumpCmd},
    { "erase  ",  "<flash adr> <length>",NULL,EraseCmd},
    { "flash  ",  "<filename> <flash adr>",NULL,FlashCmd},
+   { "map    ",  "Display blank regions in flash",NULL,MapCmd},
    { "tftp   ",  "<IP adr of tftp server>",NULL,TftpCmd},
    { "verify ",  "<filename> <flash adr>",NULL,VerifyCmd},
    { "version",  "Display firmware version",NULL,VersionCmd},
@@ -536,6 +536,9 @@ err_t TcpAccept(void *arg, struct tcp_pcb *newpcb, err_t err)
       gInputReady = false;
       gSendWelcome = true;
       gRxCount = 0;
+   // Assume tftp server is on the same host as the incoming telnet connection
+      gTftp.ServerIP = newpcb->remote_ip;
+
       ret_err = ERR_OK;
    }
 
@@ -933,7 +936,7 @@ int TftpCmd(char *CmdLine)
    return Ret;
 }
 
-int BlankCmd(char *CmdLine)
+int MapCmd(char *CmdLine)
 {
    uint32_t Adr = 0;
    uint32_t LastAdr = 0;
@@ -960,13 +963,16 @@ int BlankCmd(char *CmdLine)
 
       spi_read(Adr,gTemp,PageSize);
       bEmpty = CheckEmpty(Adr,PageSize,EraseSize);
-      LOG("Init bEmpty to %d\n",bEmpty);
       bWasEmpty = bEmpty;
+
+      NetPrintf("%s: %d MB, %d KB sectors\n",
+                pFlashInfo->Desc,
+                pFlashInfo->FlashSize /(1024 * 1024),
+                pFlashInfo->EraseSize / 1024);
 
       while(Adr < FlashSize) {
          if(bPrintStart) {
             bPrintStart = false;
-            LOG("0x%06x -> ",Adr);
             NetPrintf("0x%06x -> ",Adr);
             NetWaitBufEmpty();
          }
@@ -974,16 +980,13 @@ int BlankCmd(char *CmdLine)
          bEmpty = CheckEmpty(Adr,PageSize,EraseSize);
          if(bWasEmpty != bEmpty) {
          // End of region
-            LOG("Adr 0x%x bWasEmpty %d bEmpty %d\n",Adr,bWasEmpty,bEmpty);
             bWasEmpty = bEmpty;
             bPrintStart = true;
-            LOG("0x%06x - %sblank\n",Adr-1,!bWasEmpty ? "" : "not ");
-            NetPrintf("0x%06x - %sblank\n",Adr-1,!bWasEmpty ? "" : "not ");
-            LOG("Adr 0x%x bWasEmpty %d bEmpty %d\n",Adr,bWasEmpty,bEmpty);
+            NetPrintf("0x%06x %4d K %sempty\n",Adr-1,(Adr - LastAdr) / 1024,
+                      !bWasEmpty ? "" : "not ");
+            LastAdr = Adr;
          }
       }
-      LOG("0x60%x - %sblank\n",Adr-1,bWasEmpty ? "" : "not ");
-      NetPrintf("0x%06x - %sblank\n",Adr-1,bWasEmpty ? "" : "not ");
    } while(false);
    return Ret;
 }
