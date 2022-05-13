@@ -51,6 +51,8 @@
 #include "lwip/autoip.h"
 #include "lwip/snmp.h"
 
+#include "lwip/apps/tftp_client.h"
+
 /* lwIP netif includes */
 #include "lwip/etharp.h"
 #include "netif/ethernet.h"
@@ -79,8 +81,10 @@ err_t TcpPoll(void *arg, struct tcp_pcb *tpcb);
 err_t TcpSent(void *arg, struct tcp_pcb *tpcb, u16_t len);
 
 #define MAX_ETH_FRAME_LEN     1518
+#define RX_BUF_LEN            80
+
 int gRxCount;
-uint8_t gRxBuf[MAX_ETH_FRAME_LEN];
+uint8_t gRxBuf[RX_BUF_LEN];
 
 uint8_t gOurMac[] = {MAC_ADR};
 struct netif gNetif;
@@ -106,7 +110,9 @@ int NetPrintFillPcb(struct tcp_pcb *tpcb);
 void SendPrompt(void);
 void UpdateLEDs(void);
 int GetAdrAndLen(char **pCmdline,uint32_t *pAdr,uint32_t *pLen);
+int GetFilenameAndAdr(char **pCmdline);
 bool CheckEmpty(uint32_t Adr,uint32_t PageSize,uint32_t EraseSize);
+int TftpTranserWait(tftp_ldr_internal *p);
 
 const char gVerStr[] = "Pano LDR v0.01 compiled " __DATE__ " " __TIME__ "\r\n";
 
@@ -306,7 +312,7 @@ void ClearRxFifo()
          if(ETH_STATUS & ETH_STATUS_RXEMPTY) {
             break;
          }
-         gRxBuf[i % MAX_ETH_FRAME_LEN] = ETH_RX();
+         Byte = ETH_RX();
       }
       LOG("FIFO %scleared after %d reads\n",i == 2048 ? "not " : "",i);
    }
@@ -561,7 +567,17 @@ err_t TcpRecv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
             }
          }
          else {
-            if(*cp == '\r') {
+            if(*cp == '\b' || *cp == 127) {
+            // back space or delete
+               if(gRxCount > 0) {
+                  gRxCount--;
+                  NetPuts("\b \b"); // Send back space, space, back space
+               }
+               else {
+                  NetPuts("\a"); // beep
+               }
+            }
+            else if(*cp == '\r') {
                gInputReady = true;
                gRxBuf[gRxCount] = 0;
             }
@@ -816,7 +832,7 @@ int EraseCmd(char *CmdLine)
    uint32_t Len;
    uint32_t BytesErased;
    char *cp = CmdLine;
-   FlashInfo_t *pInfo = spi_get_flashinfo();
+   const FlashInfo_t *pInfo = spi_get_flashinfo();
    
    do {
       if((Ret = GetAdrAndLen(&cp,&Adr,&Len)) != RESULT_OK) {
@@ -849,35 +865,9 @@ int FlashCmd(char *CmdLine)
    tftp_ldr_internal *p = &gTftp;
 
    do {
-      if(!*cp) {
-      // No arguments given
-         Ret = RESULT_USAGE;
+      if((Ret = GetFilenameAndAdr(&cp)) != RESULT_OK) {
          break;
       }
-
-      if(p->ServerIP.addr == 0) {
-         NetPrintf("Error - TFTP server address not set\n");
-         Ret = RESULT_ERR;
-         break;
-      }
-
-      cp = Skip2Space(cp);
-      *cp++ = 0;
-
-      if(strlen(cp) > MAX_FILENAME_LEN) {
-         NetPrintf("Error - invalid filename, maximum length is %d characters\n",
-                   MAX_FILENAME_LEN);
-         Ret = RESULT_ERR;
-         break;
-      }
-      strcpy(p->Filename,CmdLine);
-
-      if(ConvertValue(&cp,&p->FlashAdr)) {
-         NetPrintf("Error - invalid address\n");
-         Ret = RESULT_ERR;
-         break;
-      }
-
       p->MaxBytes = sizeof(gTemp);
       p->Ram = gTemp;
       p->TransferType = TFTP_TYPE_FLASH;
@@ -887,22 +877,10 @@ int FlashCmd(char *CmdLine)
          break;
       }
 
-      while(p->Error == TFTP_IN_PROGRESS) {
-         pano_netif_poll();
+      Ret = TftpTranserWait(p);
+      if(Ret == RESULT_OK) {
+         NetPrintf("flashed %d bytes\n",p->BytesTransfered);
       }
-      if(p->ErrMsg[0]) {
-         NetPrintf("%s\n",p->ErrMsg);
-         Ret = RESULT_ERR;
-         break;
-      }
-      if(p->Error != TFTP_OK) {
-         NetPrintf("Failed %d\n",p->Error);
-         Ret = RESULT_ERR;
-         break;
-      }
-
-      NetPrintf("flashed %d bytes\n",p->BytesTransfered);
-      Ret = RESULT_OK;
    } while(false);
 
    return Ret;
@@ -912,17 +890,21 @@ int VerifyCmd(char *CmdLine)
 {
    int Ret;
    err_t Err;
+   tftp_ldr_internal *p = &gTftp;
 
    do {
-      if(gTftp.ServerIP.addr == 0) {
-         NetPrintf("Error - TFTP server address not set\n");
+      if((Ret = GetFilenameAndAdr(&CmdLine)) != RESULT_OK) {
          break;
       }
-      gTftp.MaxBytes = sizeof(gTemp);
-      gTftp.Ram = gTemp;
-      gTftp.TransferType = TFTP_TYPE_COMPARE;
-      if((Err = ldr_tftp_init(&gTftp))!= ERR_OK) {
+      p->MaxBytes = sizeof(gTemp);
+      p->Ram = gTemp;
+      p->TransferType = TFTP_TYPE_COMPARE;
+      if((Err = ldr_tftp_init(p))!= ERR_OK) {
          NetPrintf("tftp transfer failed %d:%d\n",Err,gTftp.Error);
+      }
+      Ret = TftpTranserWait(p);
+      if(Ret == RESULT_OK) {
+         NetPrintf("%d bytes verified\n",p->BytesTransfered);
       }
    } while(false);
 
@@ -958,7 +940,7 @@ int BlankCmd(char *CmdLine)
    uint32_t FlashSize;
    uint32_t PageSize;
    uint32_t EraseSize;
-   FlashInfo_t *pFlashInfo = spi_get_flashinfo();
+   const FlashInfo_t *pFlashInfo = spi_get_flashinfo();
    int Ret = RESULT_OK;
    char *pEmpty;
    bool bWasEmpty;
@@ -1028,7 +1010,7 @@ int BootCmd(char *CmdLine)
 int GetAdrAndLen(char **pCmdline,uint32_t *pAdr,uint32_t *pLen)
 {
    int Ret = RESULT_BAD_ARG;
-   FlashInfo_t *pFlashInfo = spi_get_flashinfo();
+   const FlashInfo_t *pFlashInfo = spi_get_flashinfo();
    uint32_t FlashSize;
 
    do {
@@ -1066,6 +1048,47 @@ int GetAdrAndLen(char **pCmdline,uint32_t *pAdr,uint32_t *pLen)
    return Ret;
 }
 
+// Parse command line: <filename> <flash adr>
+// Saving filename and flash adr in gTftp
+int GetFilenameAndAdr(char **pCmdLine)
+{
+   int Ret = RESULT_BAD_ARG;
+   char *cp = *pCmdLine;
+   tftp_ldr_internal *p = &gTftp;
+
+   do {
+      if(!*cp) {
+      // No arguments given
+         Ret = RESULT_USAGE;
+         break;
+      }
+
+      if(p->ServerIP.addr == 0) {
+         NetPrintf("Error - TFTP server address not set\n");
+         Ret = RESULT_ERR;
+         break;
+      }
+
+      cp = Skip2Space(cp);
+      *cp++ = 0;
+
+      if(strlen(cp) > MAX_FILENAME_LEN) {
+         NetPrintf("Error - invalid filename, maximum length is %d characters\n",
+                   MAX_FILENAME_LEN);
+         Ret = RESULT_ERR;
+         break;
+      }
+      strcpy(p->Filename,*pCmdLine);
+      if(Ret = GetAdrAndLen(&cp,&gTftp.FlashAdr,NULL)) {
+         break;
+      }
+
+      Ret = RESULT_OK;
+   } while(false);
+
+   return Ret;
+}
+
 bool CheckEmpty(uint32_t Adr,uint32_t PageSize,uint32_t EraseSize)
 {
    bool Ret = true;
@@ -1082,6 +1105,26 @@ bool CheckEmpty(uint32_t Adr,uint32_t PageSize,uint32_t EraseSize)
          break;
       }
       Adr += PageSize;
+   }
+
+   return Ret;
+}
+
+int TftpTranserWait(tftp_ldr_internal *p)
+{
+   int Ret = RESULT_OK;
+
+   while(p->Error == TFTP_IN_PROGRESS) {
+      pano_netif_poll();
+   }
+   tftp_cleanup();
+   if(p->ErrMsg[0]) {
+      NetPrintf("%s\n",p->ErrMsg);
+      Ret = RESULT_ERR;
+   }
+   else if(p->Error != TFTP_OK) {
+      NetPrintf("Failed %d\n",p->Error);
+      Ret = RESULT_ERR;
    }
 
    return Ret;

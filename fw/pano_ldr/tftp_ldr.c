@@ -50,9 +50,11 @@
 #include <string.h>
 
 #include "lwip/apps/tftp_client.h"
-#include "lwip/apps/tftp_server.h"
+// #include "lwip/apps/tftp_server.h"
 #include "tftp_ldr.h"
 #include "spi_drv.h"
+
+#define INVALID_FLASH_ADR     0xffffffff
 
 static void *tftp_open(const char *p,const char *Mode,u8_t bWrite)
 {
@@ -77,6 +79,8 @@ static int tftp_read(void *handle,void *Buf, int Len)
 static int tftp_write(void *handle, struct pbuf *pBuf)
 {
    tftp_ldr_internal *p = (tftp_ldr_internal *) handle;
+   uint32_t Adr = p->FlashAdr + p->BytesTransfered;
+
    int Ret = 0;  // assume the best
    u16_t TotalLen = pBuf->tot_len;
    u16_t Len = 0;
@@ -95,18 +99,38 @@ static int tftp_write(void *handle, struct pbuf *pBuf)
             memcpy(&p->Ram[p->BytesTransfered],pBuf->payload,BufLen);
             break;
 
-         case TFTP_TYPE_FLASH:
+         case TFTP_TYPE_FLASH: {
+            FlashInfo_t *pInfo = spi_get_flashinfo();
+            uint32_t EraseSize = pInfo->EraseSize;
+            uint32_t LastAdr = Adr + BufLen;
+            uint32_t EraseAdr;
+            uint32_t EraseEnd = LastAdr - (LastAdr % EraseSize);
+
+            if(p->LastEraseAdr != EraseEnd) {
+               if(p->LastEraseAdr == INVALID_FLASH_ADR) {
+                  p->LastEraseAdr = Adr - (Adr % EraseSize);
+               }
+               else {
+                  p->LastEraseAdr += EraseSize;
+               }
+               LOG("erase 0x%x\n",p->LastEraseAdr);
+               spi_erase(p->LastEraseAdr,pInfo->EraseSize);
+            }
+
             LOG("flash %d @ 0x%x\n",BufLen,p->FlashAdr + p->BytesTransfered);
             spi_write(p->FlashAdr + p->BytesTransfered,pBuf->payload,BufLen);
             break;
+         }
 
          case TFTP_TYPE_COMPARE:
+            LOG("comparing %d bytes\n",BufLen);
             if(BufLen > p->MaxBytes) {
                p->Error = TFTP_ERR_BUF_TOO_SMALL;
                break;
             }
-            spi_read(p->FlashAdr + p->BytesTransfered,p->Ram,BufLen);
+            spi_read(Adr,p->Ram,BufLen);
             if(memcmp(p->Ram,pBuf->payload,BufLen) != 0) {
+               LOG("Compare failed\n",BufLen);
                p->Error = TFTP_ERR_COMPARE_FAIL;
             }
             break;
@@ -167,6 +191,7 @@ err_t ldr_tftp_init(tftp_ldr_internal *p)
          break;
       }
       p->Error = TFTP_OK;
+      p->LastEraseAdr = INVALID_FLASH_ADR;
 
       if((Err = tftp_init_client(&tftp)) != ERR_OK) {
          ELOG("tftp_init_client failed %d\n",Err);

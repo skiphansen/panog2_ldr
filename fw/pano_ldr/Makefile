@@ -1,6 +1,6 @@
 include ../../project.mk
 
-TARGET       = pano_mon
+TARGET       = pano_ldr
 
 # source to include
 SRC_DIR      = .

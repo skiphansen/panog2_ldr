@@ -33,6 +33,7 @@ typedef struct {
    TransferType_t TransferType;
    char *Ram;
    uint32_t FlashAdr;
+   uint32_t LastEraseAdr;
    TransferResult_t Error;
 } tftp_ldr_internal;
 
