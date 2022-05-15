@@ -54,6 +54,10 @@
 #include "tftp_ldr.h"
 #include "spi_drv.h"
 
+// #define DEBUG_LOGGING         1
+// #define VERBOSE_DEBUG_LOGGING 1
+#include "log.h"
+
 #define INVALID_FLASH_ADR     0xffffffff
 
 static void *tftp_open(const char *p,const char *Mode,u8_t bWrite)
@@ -86,8 +90,6 @@ static int tftp_write(void *handle, struct pbuf *pBuf)
    u16_t Len = 0;
    u16_t BufLen;
 
-   LOG("called\n");
-
    while(Ret == 0 && Len < TotalLen) {
       BufLen = pBuf->len;
       switch(p->TransferType) {
@@ -106,7 +108,7 @@ static int tftp_write(void *handle, struct pbuf *pBuf)
             uint32_t EraseAdr;
             uint32_t EraseEnd = LastAdr - (LastAdr % EraseSize);
 
-            if(p->LastEraseAdr != EraseEnd) {
+            if(p->bAutoErase && p->LastEraseAdr != EraseEnd) {
                if(p->LastEraseAdr == INVALID_FLASH_ADR) {
                   p->LastEraseAdr = Adr - (Adr % EraseSize);
                }

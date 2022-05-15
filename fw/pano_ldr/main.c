@@ -57,9 +57,12 @@
 #include "lwip/etharp.h"
 #include "netif/ethernet.h"
 #include "tftp_ldr.h"
+#define DEBUG_LOGGING         1
+// #define VERBOSE_DEBUG_LOGGING 1
+#include "log.h"
 
 // How often to update LEDs in milliseconds
-#define LED_BLINK_RATE     500
+#define LED_BLINK_RATE     250
 
 #define NET_PRINT_BUF_LEN  120
 typedef struct {
@@ -93,6 +96,7 @@ bool gSendWelcome;
 bool gInputReady;
 tftp_ldr_internal gTftp;
 char gTemp[1024];
+uint32_t gEthStatus;
 
 bool ButtonJustPressed(void);
 void ClearRxFifo(void);
@@ -112,9 +116,11 @@ int GetAdrAndLen(char **pCmdline,uint32_t *pAdr,uint32_t *pLen);
 int GetFilenameAndAdr(char **pCmdline);
 bool CheckEmpty(uint32_t Adr,uint32_t PageSize,uint32_t EraseSize);
 int TftpTranserWait(tftp_ldr_internal *p);
+int FlashInternal(char *CmdLine,bool bAutoErase);
 
 const char gVerStr[] = "Pano LDR v0.01 compiled " __DATE__ " " __TIME__ "\r\n";
 
+int AutoFlashCmd(char *CmdLine);
 int MapCmd(char *CmdLine);
 int BootCmd(char *CmdLine);
 int DumpCmd(char *CmdLine);
@@ -128,8 +134,9 @@ const CommandTable_t gCmdTable[] = {
    { "boot   ",  "<flash adr>",NULL,BootCmd},
    { "dump   ",  "<flash adr> <length>",NULL,DumpCmd},
    { "erase  ",  "<start adr> <end adr>",NULL,EraseCmd},
-   { "flash  ",  "<filename> <flash adr>",NULL,FlashCmd},
+   { "flash  ",  "<filename> <flash adr>",NULL,AutoFlashCmd},
    { "map    ",  "Display blank regions in flash",NULL,MapCmd},
+   { "reflash",  "<filename> <flash adr> flash (w/o auto erase)",NULL,FlashCmd},
    { "tftp   ",  "<IP adr of tftp server>",NULL,TftpCmd},
    { "verify ",  "<filename> <flash adr>",NULL,VerifyCmd},
    { "version",  "Display firmware version",NULL,VersionCmd},
@@ -147,7 +154,6 @@ int main(int argc, char *argv[])
     unsigned char Buf[256];
     int Id = 0;
     uint32_t Temp;
-    uint32_t EthStatus = 0;
     uint32_t NewEthStatus;
     uint8_t Byte;
     uint16_t Count;
@@ -165,31 +171,6 @@ int main(int argc, char *argv[])
 
     spi_init(CONFIG_SPILITE_BASE);
     spi_chip_init();
-#if 0
-    {
-//       #define TEST_ADR    0x8c0000
-       #define TEST_ADR    0x380000
-       int i;
-
-       spi_read(TEST_ADR,gTemp,32);
-       LOG("Init data:\n");
-       LOG_HEX(gTemp,32);
-
-       spi_erase(TEST_ADR, 256*1024);
-       spi_read(TEST_ADR,gTemp,32);
-       LOG("After erase:\n");
-       LOG_HEX(gTemp,32);
-
-       for(i = 0; i < 32; i++) {
-          gTemp[i] = (char) i;
-       }
-       spi_write(TEST_ADR,gTemp,32);
-
-       spi_read(TEST_ADR,gTemp,32);
-       LOG("after read:\n");
-       LOG_HEX(gTemp,32);
-    }
-#endif
 
     lwip_init();
     init_default_netif();
@@ -200,14 +181,14 @@ int main(int argc, char *argv[])
        UpdateLEDs();
        pano_netif_poll();
        NewEthStatus = ETH_STATUS & (ETH_STATUS_LINK_UP | ETH_STATUS_LINK_SPEED);
-       if(EthStatus != NewEthStatus) {
+       if(gEthStatus != NewEthStatus) {
           LOG_R("Ethernet Status: 0x%x\n",ETH_STATUS);
-          EthStatus = NewEthStatus;
+          gEthStatus = NewEthStatus;
           ALOG_R("Ethernet link is %s",
-                 (EthStatus & ETH_STATUS_LINK_UP) ? "up" : "down");
-          if(EthStatus & ETH_STATUS_LINK_UP) {
+                 (gEthStatus & ETH_STATUS_LINK_UP) ? "up" : "down");
+          if(gEthStatus & ETH_STATUS_LINK_UP) {
              ALOG_R(", ");
-             switch(EthStatus & ETH_STATUS_LINK_SPEED) {
+             switch(gEthStatus & ETH_STATUS_LINK_SPEED) {
                 case SPEED_1000MBPS:
                    ALOG_R("1000BaseT");
                    break;
@@ -236,25 +217,12 @@ int main(int argc, char *argv[])
           ALOG_R("\n");
        }
 
-       if(!bHaveIP && (EthStatus & ETH_STATUS_LINK_UP)) {
+       if(!bHaveIP && (gEthStatus & ETH_STATUS_LINK_UP)) {
           if(dhcp_supplied_address(&gNetif)) {
              bHaveIP = true;
              ALOG_R("IP address assigned %s\n",ip4addr_ntoa(&gNetif.ip_addr));
           }
        }
-
-#if 0
-       if(bHaveIP && !bRanTest) {
-          bRanTest = true;
-          strcpy(gTftp.Filename,"tftp_ldr.h");
-          ipaddr_aton("192.168.123.170",&gTftp.ServerIP);
-          gTftp.MaxBytes = sizeof(gTemp);
-          gTftp.Ram = gTemp;
-          gTftp.TransferType = TFTP_TYPE_RAM;
-          ldr_tftp_init(&gTftp);
-       }
-       ButtonJustPressed();
-#endif
 
        if(gSendWelcome) {
           gSendWelcome = false;
@@ -458,14 +426,6 @@ void pano_netif_poll()
       if(p != NULL) {
          cp = (uint8_t *) p->payload;
          *cp = ETH_RX();
-#ifdef MIB2_STATS
-         if((*cp & 0x01) == 0) {
-           MIB2_STATS_NETIF_INC(&gNetif,ifinucastpkts);
-         }
-         else {
-           MIB2_STATS_NETIF_INC(&gNetif,ifinnucastpkts);
-         }
-#endif
          cp++;
          for(i = 1; i < Count; i++) {
             *cp++ = ETH_RX();
@@ -535,9 +495,10 @@ err_t TcpAccept(void *arg, struct tcp_pcb *newpcb, err_t err)
       gInputReady = false;
       gSendWelcome = true;
       gRxCount = 0;
-   // Assume tftp server is on the same host as the incoming telnet connection
-      gTftp.ServerIP = newpcb->remote_ip;
-
+      if(gTftp.ServerIP.addr == 0) {
+      // Assume tftp server is on the same host as the incoming telnet connection
+         gTftp.ServerIP = newpcb->remote_ip;
+      }
       ret_err = ERR_OK;
    }
 
@@ -599,6 +560,7 @@ err_t TcpRecv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
    }
    else {
       LOG("connection closed\n");
+      gTcpCon = NULL;
    }
    return ERR_OK;
 }
@@ -622,16 +584,18 @@ err_t TcpSent(void *arg, struct tcp_pcb *tpcb, u16_t len)
    err_t Err;
    NetPrintInternal_t *p = &gNetPrint;
 
-   LOG("Called, tpcb: %p, len: %d\n",tpcb,len);
+   LOG("len %d",len);
 
    gNetPrint.BytesSent += len;
    if(p->BytesSent == p->Len) {
       p->BytesSent = p->Len = p->BytesQueued = 0;
+      LOG_R(" done");
    }
    else {
    // Send some more
       NetPrintFillPcb(tpcb);
    }
+   LOG_R("\n");
 }
 
 
@@ -733,11 +697,13 @@ int NetPrintFillPcb(struct tcp_pcb *tpcb)
    err_t Err;
    NetPrintInternal_t *p = &gNetPrint;
    int Byte2Write;
+   int CanSend = tcp_sndbuf(tpcb);
 
    if((Byte2Write = p->Len - p->BytesQueued) > 0) {
    // Have data to send
-      if(Byte2Write > tcp_sndbuf(tpcb)) {
-         Byte2Write = tcp_sndbuf(tpcb);
+      if(Byte2Write > CanSend) {
+         LOG("Reduced Byte2Write from %d to %d\n",Byte2Write,CanSend);
+         Byte2Write = CanSend;
       }
 
       VLOG("Calling tcp_write BytesSent %d, Byte2Write %d\n",
@@ -762,40 +728,46 @@ void SendPrompt()
    NetPrintf("ldr> ");
 }
 
+/* 
+   Ethernet link down: flashing red
+   Ethernet link up, no IP address: flashing blue
+   IP address assigned: flashing green
+   User connected: solid green
+*/
 void UpdateLEDs()
 {
    static t_time LastUpdate;
    t_time Now = timer_now();
-   static uint32_t LedCounter;
-   static uint32_t Led;
+   static uint32_t Led = GPIO_LED_BITS;
 
    if((Now - LastUpdate) > LED_BLINK_RATE) {
-      LedCounter++;
-      if(LedCounter & 1) {
-      // A LED is on
-         switch(LedCounter >> 1) {
-            case 0:
-               Led = GPIO_BIT_RED_LED;
-               break;
-
-            case 1:
-               Led = GPIO_BIT_GREEN_LED;
-               break;
-
-            case 2:
-               Led = GPIO_BIT_BLUE_LED;
-               break;
-         }
-         REG_WR(GPIO_BASE + GPIO_OUTPUT_SET,Led);
+      LastUpdate = Now;
+      if(gTcpCon != NULL) {
+      // User connected: solid green
+         REG_WR(GPIO_BASE + GPIO_OUTPUT_CLR,Led);
+         Led = GPIO_BIT_GREEN_LED;
       }
-      else {
+      else if(Led != 0) {
       // Turn off last LED
          REG_WR(GPIO_BASE + GPIO_OUTPUT_CLR,Led);
-         if(LedCounter >= 6) {
-            LedCounter = 0;
-         }
+         Led = 0;
       }
-      LastUpdate = Now;
+      else if(!(gEthStatus & ETH_STATUS_LINK_UP)) {
+      // Ethernet link down, flashing red
+         Led = GPIO_BIT_RED_LED;
+      }
+      else if(!dhcp_supplied_address(&gNetif)) {
+      // Ethernet link up, no IP address: flashing blue
+         Led = GPIO_BIT_BLUE_LED;
+      }
+      else {
+         Led = GPIO_BIT_GREEN_LED;
+      }
+
+      if(Led != 0) {
+      // Turn on LED
+         REG_WR(GPIO_BASE + GPIO_OUTPUT_SET,Led);
+      }
    }
 }
 
@@ -870,7 +842,7 @@ int EraseCmd(char *CmdLine)
 }
 
 // <filename> <flash adr>
-int FlashCmd(char *CmdLine)
+int FlashInternal(char *CmdLine,bool bAutoErase)
 {
    int Ret = RESULT_BAD_ARG;  // Assume the worse
    err_t Err;
@@ -878,6 +850,7 @@ int FlashCmd(char *CmdLine)
    tftp_ldr_internal *p = &gTftp;
 
    do {
+      p->bAutoErase = bAutoErase;
       if((Ret = GetFilenameAndAdr(&cp)) != RESULT_OK) {
          break;
       }
@@ -898,6 +871,17 @@ int FlashCmd(char *CmdLine)
 
    return Ret;
 }
+
+int FlashCmd(char *CmdLine)
+{
+   return FlashInternal(CmdLine,false);
+}
+
+int AutoFlashCmd(char *CmdLine)
+{
+   return FlashInternal(CmdLine,true);
+}
+
 
 int VerifyCmd(char *CmdLine)
 {
@@ -1085,9 +1069,8 @@ int GetFilenameAndAdr(char **pCmdLine)
       cp = Skip2Space(cp);
       *cp++ = 0;
 
-      if(strlen(cp) > MAX_FILENAME_LEN) {
-         NetPrintf("Error - invalid filename, maximum length is %d characters\n",
-                   MAX_FILENAME_LEN);
+      if(strlen(*pCmdLine) > MAX_FILENAME_LEN) {
+         NetPrintf("Filename too long, max %d characters\n",MAX_FILENAME_LEN);
          Ret = RESULT_ERR;
          break;
       }

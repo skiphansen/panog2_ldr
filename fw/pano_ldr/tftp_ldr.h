@@ -1,9 +1,6 @@
 #ifndef _TFTP_LDR_H_
 #define _TFTP_LDR_H_
 
-#define DEBUG_LOGGING         1
-#define VERBOSE_DEBUG_LOGGING 1
-#include "log.h"
 
 // How often to show progress during flash command
 #define PROGRESS_SIZE      (64*1024)
@@ -39,6 +36,7 @@ typedef struct {
    uint32_t LastEraseAdr;
    uint32_t LastProgress;
    TransferResult_t Error;
+   bool bAutoErase;
 } tftp_ldr_internal;
 
 err_t ldr_tftp_init(tftp_ldr_internal *p);

@@ -11,5 +11,10 @@
 #define GPIO_BIT_CODEC_SDA    0x20
 #define GPIO_BIT_CODEC_SCL    0x40
 
+#define GPIO_LED_BITS         (GPIO_BIT_RED_LED  | \
+                              GPIO_BIT_GREEN_LED | \
+                              GPIO_BIT_BLUE_LED)
+
+
 #endif   // _PANIO_IO_H_
 
