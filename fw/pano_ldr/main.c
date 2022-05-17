@@ -107,7 +107,8 @@ err_t pano_netif_output(struct netif *netif, struct pbuf *p);
 void TcpInit(void);
 err_t TcpAccept(void *arg, struct tcp_pcb *newpcb, err_t err);
 void NetPuts(char *String);
-void NetWaitBufEmpty(void);
+void NetWaitBufEmptyInternal(const char *funct,int Line);
+#define NetWaitBufEmpty(x) NetWaitBufEmptyInternal(__FUNCTION__,__LINE__)
 int NetDumpHex(void *Data,int Len,bool bWithAdr,int Adr);
 int NetPrintFillPcb(struct tcp_pcb *tpcb);
 void SendPrompt(void);
@@ -304,7 +305,18 @@ void lwip_pano_assert(const char *msg, int line, const char *file)
 uint32_t sys_now(void);
 uint32_t sys_now(void)
 {
-   return (uint32_t) timer_now();
+   static uint32_t LastTimerNow;
+   static uint32_t UptimeMillsecs;
+   uint32_t TimerNow;
+
+// timer_now is millisecionds, but it's based on the CPU clock so it wraps
+// pretty quickly (14 minutes @ 50 Mhz) so use it to update a local up time
+
+   TimerNow = (uint32_t) timer_now();
+   UptimeMillsecs += TimerNow - LastTimerNow;
+   LastTimerNow = TimerNow;
+
+   return UptimeMillsecs;
 }
 
 
@@ -584,18 +596,18 @@ err_t TcpSent(void *arg, struct tcp_pcb *tpcb, u16_t len)
    err_t Err;
    NetPrintInternal_t *p = &gNetPrint;
 
-   LOG("len %d",len);
+   VLOG("len %d",len);
 
    gNetPrint.BytesSent += len;
    if(p->BytesSent == p->Len) {
       p->BytesSent = p->Len = p->BytesQueued = 0;
-      LOG_R(" done");
+      VLOG_R(" done");
    }
    else {
    // Send some more
       NetPrintFillPcb(tpcb);
    }
-   LOG_R("\n");
+   VLOG_R("\n");
 }
 
 
@@ -626,7 +638,7 @@ void NetPuts(char *String)
    NetPrintInternal_t *p = &gNetPrint;
    char *cp = &p->PrintBuf[p->Len];
 
-   while(*String) {
+   while(gTcpCon != NULL && *String) {
       if(p->Len >= sizeof(p->PrintBuf)) {
       // Flush buffer
          NetPrintFillPcb(gTcpCon);
@@ -638,16 +650,16 @@ void NetPuts(char *String)
    }
 }
 
-void NetWaitBufEmpty()
+void NetWaitBufEmptyInternal(const char *funct,int Line)
 {
    NetPrintInternal_t *p = &gNetPrint;
-   if(p->Len != p->BytesSent) {
-      LOG("Waiting Len %d, BytesSent %d\n",p->Len,p->BytesSent);
-      while(p->Len != p->BytesSent) {
+   if(gTcpCon != NULL && p->Len != p->BytesSent) {
+      // LOG_R("%s#%d: Waiting Len %d, BytesSent %d\n",funct,Line,p->Len,p->BytesSent);
+      while(gTcpCon != NULL && p->Len != p->BytesSent) {
       // Can't while until the previous buffer has been sent.
          pano_netif_poll();
       }
-      LOG("Finished waiting\n");
+      VLOG("Finished waiting\n");
    }
 }
 
@@ -658,7 +670,6 @@ int NetDumpHex(void *Data,int Len,bool bWithAdr,int Adr)
    char Hex[9];
    unsigned char *cp = Data;
 
-   NetWaitBufEmpty();
    if(Len == 0) {
    // Dump complete
       if(p->BytesOnLine > 0) {
@@ -699,7 +710,7 @@ int NetPrintFillPcb(struct tcp_pcb *tpcb)
    int Byte2Write;
    int CanSend = tcp_sndbuf(tpcb);
 
-   if((Byte2Write = p->Len - p->BytesQueued) > 0) {
+   if(gTcpCon != NULL && (Byte2Write = p->Len - p->BytesQueued) > 0) {
    // Have data to send
       if(Byte2Write > CanSend) {
          LOG("Reduced Byte2Write from %d to %d\n",Byte2Write,CanSend);
@@ -784,7 +795,7 @@ int DumpCmd(char *CmdLine)
       if((Ret = GetAdrAndLen(&cp,&Adr,&Len)) != RESULT_OK) {
          break;
       }
-      while(BytesRead < Len) {
+      while(gTcpCon != NULL && BytesRead < Len) {
          Bytes2Read = Len;
          if(Bytes2Read > sizeof(gTemp)) {
             Bytes2Read = sizeof(gTemp);
