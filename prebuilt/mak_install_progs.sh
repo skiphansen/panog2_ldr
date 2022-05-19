@@ -18,7 +18,7 @@ make_install() {
     bitparse -i BIT -o BIN -O ${FILE}.bin ${FILE}.bit
     (cd ${PROG_FPGA_DIR};./patch_progfpga -$PATCH_OPTION -m ${PREBUILT_DIR}/${FILE}.bin)
     rm ${FILE}.bin
-    cp ${PROG_FPGA_DIR}/patched/series2/${FPGA_TYPE}/progfpga_multiboot install_ldr_rev_${1}
+    cp ${PROG_FPGA_DIR}/patched/series2/${FPGA_TYPE}/progfpga_multiboot install_rev_${1}
 }
 
 make_install b

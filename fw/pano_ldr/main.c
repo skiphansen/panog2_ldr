@@ -64,6 +64,13 @@
 // How often to update LEDs in milliseconds
 #define LED_BLINK_RATE     250
 
+typedef enum {
+   TAG_AUTO_BOOT = 449220, // A random number of no significance
+   TAG_AUTO_BOOT_ADR,
+   TAG_TFTP_SRV
+} Tag_t;
+
+
 #define NET_PRINT_BUF_LEN  120
 typedef struct {
    char PrintBuf[NET_PRINT_BUF_LEN];
@@ -72,6 +79,30 @@ typedef struct {
    int BytesSent;
    int BytesOnLine;
 } NetPrintInternal_t;
+
+typedef struct {
+   uint16_t Type;
+   uint16_t Register;
+   uint32_t Value;
+} PanoInfoBlock_t;
+
+// --- The following are in network order to save some code space ---
+#define INFO_TYPE_CFG_WR   0x10        // network order
+#define INFO_TYPE_WR       0x40        // network order
+
+#define CFG_REG_BRD_ID     0x0000
+#define CFG_REG_CHIP_ID    0x0100
+#define CFG_REG_MAC_MSB    0x1000
+#define CFG_REG_MAC_LSB    0x1100
+// ---
+
+#define BOARD_ID_G1        0x00050000
+#define BOARD_ID_G1_PLUS   0x10010001
+#define BOARD_ID_G2_B      0x08010000
+#define BOARD_ID_G2_C      0x08010002
+#define BOARD_ID_DZ22_2    0x08011000
+
+#define GOLDEN_IMAGE_ADR   0x40000
 
 NetPrintInternal_t gNetPrint;
 struct tcp_pcb *gTcpCon;
@@ -97,9 +128,12 @@ bool gInputReady;
 tftp_ldr_internal gTftp;
 char gTemp[1024];
 uint32_t gEthStatus;
+bool gAutoBoot;
+uint32_t gAutoBootAdr = GOLDEN_IMAGE_ADR;
+uint32_t gBoardID;
 
-bool ButtonJustPressed(void);
 void ClearRxFifo(void);
+err_t pano_netif_init(struct netif *netif);
 void init_default_netif(void);
 void pano_netif_poll(void);
 void netif_init(void);
@@ -118,29 +152,35 @@ int GetFilenameAndAdr(char **pCmdline);
 bool CheckEmpty(uint32_t Adr,uint32_t PageSize,uint32_t EraseSize);
 int TftpTranserWait(tftp_ldr_internal *p);
 int FlashInternal(char *CmdLine,bool bAutoErase);
+uint32_t GetDataPageOffset(void);
+uint32_t *ParseDataBlock(void);
+void AddBoardInfo(Tag_t Tag,size_t Len,void *TagData);
+void ReBoot(uint32_t SpiAdr);
 
 const char gVerStr[] = "Pano LDR v0.01 compiled " __DATE__ " " __TIME__ "\r\n";
 
+int AutoCmd(char *CmdLine);
+int BootAdrCmd(char *CmdLine);
 int AutoFlashCmd(char *CmdLine);
-int MapCmd(char *CmdLine);
-int BootCmd(char *CmdLine);
+int RebootCmd(char *CmdLine);
 int DumpCmd(char *CmdLine);
 int EraseCmd(char *CmdLine);
 int FlashCmd(char *CmdLine);
+int MapCmd(char *CmdLine);
 int TftpCmd(char *CmdLine);
 int VerifyCmd(char *CmdLine);
-int VersionCmd(char *CmdLine);
 
 const CommandTable_t gCmdTable[] = {
-   { "boot   ",  "<flash adr>",NULL,BootCmd},
+   { "auto   ",  "[on | off]",NULL,AutoCmd},
+   { "bootadr",  "<flash adr>",NULL,BootAdrCmd},
    { "dump   ",  "<flash adr> <length>",NULL,DumpCmd},
    { "erase  ",  "<start adr> <end adr>",NULL,EraseCmd},
    { "flash  ",  "<filename> <flash adr>",NULL,AutoFlashCmd},
    { "map    ",  "Display blank regions in flash",NULL,MapCmd},
+   { "reboot ",  "<flash adr>",NULL,RebootCmd},
    { "reflash",  "<filename> <flash adr> flash (w/o auto erase)",NULL,FlashCmd},
    { "tftp   ",  "<IP adr of tftp server>",NULL,TftpCmd},
    { "verify ",  "<filename> <flash adr>",NULL,VerifyCmd},
-   { "version",  "Display firmware version",NULL,VersionCmd},
    { "?", NULL, NULL, HelpCmd},
    { "help",NULL, NULL, HelpCmd},
    { NULL }  // end of table
@@ -173,6 +213,16 @@ int main(int argc, char *argv[])
     spi_init(CONFIG_SPILITE_BASE);
     spi_chip_init();
 
+    ParseDataBlock();
+    if(gAutoBoot) {
+       if(REG_RD(GPIO_BASE + GPIO_INPUT) & GPIO_BIT_PANO_BUTTON) {
+          ReBoot(gAutoBootAdr);
+       }
+       else {
+          LOG_R("Pano switch pressed\n");
+       }
+    }
+
     lwip_init();
     init_default_netif();
     TcpInit();
@@ -183,7 +233,7 @@ int main(int argc, char *argv[])
        pano_netif_poll();
        NewEthStatus = ETH_STATUS & (ETH_STATUS_LINK_UP | ETH_STATUS_LINK_SPEED);
        if(gEthStatus != NewEthStatus) {
-          LOG_R("Ethernet Status: 0x%x\n",ETH_STATUS);
+          VLOG_R("Ethernet Status: 0x%x\n",ETH_STATUS);
           gEthStatus = NewEthStatus;
           ALOG_R("Ethernet link is %s",
                  (gEthStatus & ETH_STATUS_LINK_UP) ? "up" : "down");
@@ -227,7 +277,7 @@ int main(int argc, char *argv[])
 
        if(gSendWelcome) {
           gSendWelcome = false;
-          VersionCmd(NULL);
+          NetPrintf(gVerStr);
           SendPrompt();
        }
        if(gInputReady) {
@@ -242,47 +292,20 @@ int main(int argc, char *argv[])
     return 0;
 }
 
-bool ButtonJustPressed()
-{
-   static uint32_t ButtonLast = 3;
-   uint32_t Temp;
-   int Ret = 0;
-
-   Temp = REG_RD(GPIO_BASE + GPIO_INPUT) & GPIO_BIT_PANO_BUTTON;
-   if(ButtonLast != 3 && ButtonLast != Temp) {
-      if(Temp == 0) {
-         printf("Pano button pressed\n");
-         Ret = 1;
-      }
- // start golden bitstream
-    LOG("Attempting to switch to the golden bit stream\n");
-//     REG_WR(GPIO_BASE + GPIO_OUTPUT,0x80);
-    REG_WR(GPIO_BASE + BOOT_SPI_ADR,0x040000);
-    LOG("Address read back 0x%x\n",REG_RD(GPIO_BASE + BOOT_SPI_ADR));
-    REG_WR(GPIO_BASE + REBOOT_ADR,1);
-    LOG("Rebooting\n");
-    REG_WR(GPIO_BASE + REBOOT_ADR,0);
-   }
-   ButtonLast = Temp;
-
-   return Ret;
-}
-
-
 void ClearRxFifo()
 {
    int i;
    uint8_t Byte;
 
    if(!(ETH_STATUS & ETH_STATUS_RXEMPTY)) {
-      LOG("Clearing Rx FIFO\n");
+      VLOG("Clearing Rx FIFO\n");
       for(i = 0; i < 2048; i++) {
          if(ETH_STATUS & ETH_STATUS_RXEMPTY) {
             break;
          }
          Byte = ETH_RX();
       }
-      LOG("FIFO %scleared after %d reads\n",i == 2048 ? "not " : "",i);
+      VLOG("FIFO %scleared after %d reads\n",i == 2048 ? "not " : "",i);
    }
 }
 
@@ -324,9 +347,6 @@ unsigned int lwip_port_rand(void)
 {
   return (unsigned int) rand();
 }
-
-
-err_t pano_netif_init(struct netif *netif);
 
 err_t pano_netif_init(struct netif *netif)
 {
@@ -445,8 +465,8 @@ void pano_netif_poll()
          cp = (uint8_t *) p->payload;
 
 #ifdef LOG_RAW_ETH
-         VLOG_R("Rx #%d: Read %d (0x%x) bytes from Rx Fifo:\n",gRxCount,Count,Count);
-         VLOG_HEX(p->payload,p->len);
+         LOG_R("Rx #%d: Read %d (0x%x) bytes from Rx Fifo:\n",gRxCount,Count,Count);
+         LOG_HEX(p->payload,p->len);
 #endif
          if(gNetif.input(p,&gNetif) != ERR_OK) {
            LWIP_DEBUGF(NETIF_DEBUG,("%s: netif input error\n",__FUNCTION__));
@@ -609,15 +629,6 @@ err_t TcpSent(void *arg, struct tcp_pcb *tpcb, u16_t len)
    }
    VLOG_R("\n");
 }
-
-
-int VersionCmd(char *CmdLine)
-{
-   NetPrintf(gVerStr);
-
-   return RESULT_OK;
-}
-
 
 int NetPrintf(const char *Format, ...)
 {
@@ -923,6 +934,7 @@ int VerifyCmd(char *CmdLine)
 int TftpCmd(char *CmdLine)
 {
    int Ret = RESULT_OK;
+   ip_addr_t ServerIP;
 
    if(!*CmdLine) {
       if(gTftp.ServerIP.addr != 0) {
@@ -934,8 +946,11 @@ int TftpCmd(char *CmdLine)
          Ret = RESULT_USAGE;
       }
    }
-   else if(!ipaddr_aton(CmdLine,&gTftp.ServerIP)) {
+   else if(!ipaddr_aton(CmdLine,&ServerIP)) {
       Ret = RESULT_BAD_ARG;
+   }
+   else {
+      AddBoardInfo(TAG_TFTP_SRV,sizeof(ServerIP),&ServerIP);
    }
 
    return Ret;
@@ -996,7 +1011,55 @@ int MapCmd(char *CmdLine)
    return Ret;
 }
 
-int BootCmd(char *CmdLine)
+void ReBoot(uint32_t SpiAdr)
+{
+   LOG("0x%x\n",SpiAdr);
+
+   REG_WR(GPIO_BASE + BOOT_SPI_ADR,SpiAdr);
+   REG_WR(GPIO_BASE + REBOOT_ADR,1);
+   REG_WR(GPIO_BASE + REBOOT_ADR,0);
+}
+
+int AutoCmd(char *CmdLine)
+{
+   int Ret = RESULT_OK;
+   int On;
+   bool AutoBoot;
+
+   if(!*CmdLine) {
+   }
+   else if((On = strcmp(CmdLine,"off")) == 0 || strcmp(CmdLine,"on") == 0) {
+      AutoBoot = On ? true : false;
+      AddBoardInfo(TAG_AUTO_BOOT,sizeof(bool),&AutoBoot);
+   }
+   else {
+      Ret = RESULT_BAD_ARG;
+   }
+   NetPrintf("Autoboot o%s\n",gAutoBoot ? "n":"ff");
+
+   return Ret;
+}
+
+int BootAdrCmd(char *CmdLine)
+{
+   int Ret = RESULT_OK;
+   int On;
+   uint32_t AutoBootAdr;
+
+   if(!*CmdLine) {
+      NetPrintf("Autoboot @0x%x\n",gAutoBootAdr);
+   }
+   else if(ConvertValue(&CmdLine,&AutoBootAdr)) {
+      Ret = RESULT_BAD_ARG;
+   }
+   else {
+      AddBoardInfo(TAG_AUTO_BOOT_ADR,sizeof(AutoBootAdr),&AutoBootAdr);
+   }
+   return Ret;
+}
+
+
+int RebootCmd(char *CmdLine)
 {
    int Ret;
    uint32_t Adr;
@@ -1005,10 +1068,7 @@ int BootCmd(char *CmdLine)
    if((Ret = GetAdrAndLen(&cp,&Adr,NULL)) == RESULT_OK) {
       NetPrintf("Booting bitstream @ 0x%x\n");
       NetWaitBufEmpty();
-
-      REG_WR(GPIO_BASE + BOOT_SPI_ADR,Adr);
-      REG_WR(GPIO_BASE + REBOOT_ADR,1);
-      REG_WR(GPIO_BASE + REBOOT_ADR,0);
+      ReBoot(Adr);
    }
 
    return Ret;
@@ -1120,14 +1180,28 @@ bool CheckEmpty(uint32_t Adr,uint32_t PageSize,uint32_t EraseSize)
 int TftpTranserWait(tftp_ldr_internal *p)
 {
    int Ret = RESULT_OK;
+   int BytesOnLine = 0;
 
    while(p->Error == TFTP_IN_PROGRESS) {
       pano_netif_poll();
+      if((p->BytesTransfered - p->LastProgress) > PROGRESS_SIZE) {
+         p->LastProgress += PROGRESS_SIZE;
+         if(BytesOnLine++ > 64) {
+            NetPrintf("\n");
+         }
+         NetPrintf(".");
+      }
+   }
+   if(BytesOnLine > 0) {
+      NetPrintf("\n");
    }
    tftp_cleanup();
    if(p->ErrMsg[0]) {
       NetPrintf("%s\n",p->ErrMsg);
       Ret = RESULT_ERR;
+   }
+   else if(p->Error == TFTP_ERR_COMPARE_FAIL) {
+      NetPrintf("Compare failed @ 0x%0lx\n",p->FlashAdr + p->BytesTransfered);
    }
    else if(p->Error != TFTP_OK) {
       NetPrintf("Failed %d\n",p->Error);
@@ -1135,5 +1209,140 @@ int TftpTranserWait(tftp_ldr_internal *p)
    }
 
    return Ret;
+}
+
+uint32_t GetDataPageOffset()
+{
+   const FlashInfo_t *p = spi_get_flashinfo();
+   uint32_t DataPageOffset = 0;
+
+   if(p->FlashSize == (8*1024*1024)) {
+   // 8 Mbyte chip
+      DataPageOffset = 0x6b0000;
+   }
+   else if(p->FlashSize == (16*1024*1024)) {
+   // 16 Mbyte chip
+      DataPageOffset = 0x8c0000;
+   }
+   else {
+      ELOG("FlashSize 0x%x\n",p->FlashSize);
+   }
+
+   return DataPageOffset;
+}
+
+// read Pano data block into gTemp, return pointer to first free word
+uint32_t *ParseDataBlock()
+{
+   uint32_t DataPageOffset = GetDataPageOffset();
+   uint32_t *pU32 = NULL;
+   uint32_t Tag;
+   uint32_t ValueLen;
+   void *pValue;
+   PanoInfoBlock_t *PanoInfo = (PanoInfoBlock_t *) gTemp;
+
+   do {
+      if(DataPageOffset == 0) {
+         break;
+      }
+      spi_read(DataPageOffset,gTemp,sizeof(gTemp));
+      while(PanoInfo->Type != 0xffff) {
+         VLOG("Type 0x%x Register 0x%04x value 0x%x\n",
+              ntohs(PanoInfo->Type),
+              ntohs(PanoInfo->Register),
+              ntohl(PanoInfo->Value));
+         if(PanoInfo->Type == INFO_TYPE_CFG_WR) {
+            switch(PanoInfo->Register) {
+               case CFG_REG_BRD_ID:
+                  gBoardID = ntohl(PanoInfo->Value);
+                  break;
+#if 0 // Can't set MAC without gateware change to set MAC in hardware layer
+               case CFG_REG_MAC_MSB:
+                  gOurMac[0] = (uint8_t) ((PanoInfo->Value >> 16) & 0xff);
+                  gOurMac[1] = (uint8_t) (PanoInfo->Value >> 24);
+                  break;
+               case CFG_REG_MAC_LSB:
+                  memcpy(&gOurMac[2],&PanoInfo->Value,4);
+                  break;
+#endif
+
+               default:
+                  break;
+            }
+         }
+         PanoInfo++;
+      }
+      break;
+      if(gBoardID == 0) {
+      // Not a valid Pano info block, the BoardID is always present
+         break;
+      }
+   // End of Pano info, start of hacker info
+   // <32 bit tag> <32 bit length> <variable length data>...<tag><len><data>...
+   // 
+      pU32 = (uint32_t *) PanoInfo;
+      pU32++;  // Leave terminating 0xffff to keep Pano gateware happy
+      LOG_HEX(pU32,32);
+
+      while((Tag = *pU32) != 0xffffffff) {
+         LOG("Tag %ld Len %ld\n",Tag,pU32[1]);
+
+         pU32++;
+         ValueLen = *pU32++;
+         if((ValueLen & 0x3) != 0) {
+         // round up to prevent unaligned accesses
+            ValueLen += 4 - (ValueLen & 0x3);
+         }
+         pValue = pU32;
+      // Skip to next tag
+         pU32 = (uint32_t *) (((uint8_t *) pU32) + ValueLen); 
+
+         switch(Tag) {
+            case TAG_AUTO_BOOT:
+               gAutoBoot = *((bool *) pValue);
+               break;
+
+            case TAG_AUTO_BOOT_ADR:
+               gAutoBootAdr = *((uint32_t *) pValue);
+               break;
+
+            case TAG_TFTP_SRV:
+               gTftp.ServerIP.addr = *((uint32_t *) pValue);
+               break;
+
+            default:
+               break;
+         }
+      }
+   } while(false);
+
+   return pU32;
+}
+
+void AddBoardInfo(Tag_t Tag,size_t Len,void *TagData)
+{
+   uint32_t *pFirstUnused = ParseDataBlock();
+   uint32_t *pU32 = pFirstUnused;
+   uint32_t BytesAvailable;
+   uint32_t WriteOffset;
+   uint32_t EntryLen = (sizeof(uint32_t) * 2) + Len;
+
+   if(pU32 != NULL) {
+      WriteOffset = (((char *) pU32) - gTemp);
+      BytesAvailable = sizeof(gTemp) - WriteOffset;
+      BytesAvailable -= EntryLen;
+      if(BytesAvailable >= sizeof(uint32_t)) {
+      // The new data fits, write it
+         *pU32++ = (uint32_t) Tag;
+         *pU32++ = (uint32_t) Len;
+         memcpy(pU32,TagData,Len);
+         LOG("Write %d bytes of data @ 0x%x\n",EntryLen,WriteOffset);
+         LOG_HEX(gTemp,WriteOffset + EntryLen);
+         WriteOffset += GetDataPageOffset();
+
+         spi_write(WriteOffset,(uint8_t *)pFirstUnused,EntryLen);
+      }
+      ParseDataBlock(); // reload updated data
+   }
 }
 

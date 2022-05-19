@@ -70,13 +70,15 @@ static void tftp_close(void* handle)
 {
    tftp_ldr_internal *p = (tftp_ldr_internal *) handle;
    LOG("%d bytes transfered\n",p->BytesTransfered);
-   p->Error = TFTP_OK;
+   if(p->Error == TFTP_IN_PROGRESS) {
+      p->Error = TFTP_OK;
+   }
 }
 
 // tftp put
 static int tftp_read(void *handle,void *Buf, int Len)
 {
-   ELOG("I shouldn't have been called!\n");
+   ELOG("\n");
    return -1;
 }
 
@@ -121,10 +123,6 @@ static int tftp_write(void *handle, struct pbuf *pBuf)
 
             LOG("flash %d @ 0x%x\n",BufLen,p->FlashAdr + p->BytesTransfered);
             spi_write(p->FlashAdr + p->BytesTransfered,pBuf->payload,BufLen);
-            if((p->BytesTransfered - p->LastProgress) > PROGRESS_SIZE) {
-               p->LastProgress += PROGRESS_SIZE;
-               NetPrintf(".");
-            }
             break;
          }
 
@@ -136,7 +134,17 @@ static int tftp_write(void *handle, struct pbuf *pBuf)
             }
             spi_read(Adr,p->Ram,BufLen);
             if(memcmp(p->Ram,pBuf->payload,BufLen) != 0) {
-               LOG("Compare failed\n",BufLen);
+               int i;
+               char *cp = pBuf->payload;
+            // Find the exact point of failure
+               for(i = 0; i < BufLen; i++) {
+                  if(p->Ram[i] != *cp++) {
+                     break;
+                  }
+                  p->BytesTransfered++;
+               }
+
+               LOG("Compare failed\n");
                p->Error = TFTP_ERR_COMPARE_FAIL;
             }
             break;
@@ -198,6 +206,8 @@ err_t ldr_tftp_init(tftp_ldr_internal *p)
       }
       p->Error = TFTP_OK;
       p->LastEraseAdr = INVALID_FLASH_ADR;
+      p->BytesTransfered = 0;
+      p->LastProgress = 0;
 
       if((Err = tftp_init_client(&tftp)) != ERR_OK) {
          ELOG("tftp_init_client failed %d\n",Err);

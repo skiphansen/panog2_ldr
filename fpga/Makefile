@@ -29,7 +29,8 @@ EXCLUDE_SRC  += $(CORES_DIR)/core_soc/src_v/gpio_defs.v
 
 BSCAN_SPI_DIR = $(PANO_CORES_DIR)/xc3sprog
 
-COMPRESS_BITFILE = yes
+#COMPRESS_BITFILE = yes
+COMPRESS_BITFILE = no
 INIT_IMAGE = ./firmware.mem
 
 #MAP_CMDS = -w -intstyle ise -detail -ir off -ignore_keep_hierarchy -ol high
