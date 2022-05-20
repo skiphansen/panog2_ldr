@@ -104,6 +104,9 @@ Autoboot off
 ldr>
 ```
 
+DZ22-2 note:  Do not turn ON autoboot for on the DZ22-2, it is unknown
+how the "Pano button" is handled on the DZ22.
+
 ## Autoerase [on | off]
 
 The autoerase command displays or turns the autoerase feature ON and OFF.
@@ -394,6 +397,9 @@ The Pano button's LEDs are used to show pano_ldr's network state.
 
 Once the Pano button begins blinking green you should be able to telnet into
 pano_ldr.
+
+DZ22-2 note: The LED on the DZ22-2 is not directly controlled by the Pano so no useful
+status will be displayed.
 
 ## Determine the Pano's IP address
 
