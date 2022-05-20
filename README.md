@@ -5,9 +5,12 @@
 The purpose of this project is to allow a user to flash and run their own
 projects on [Pano G2](https://github.com/tomverbeure/panologic-g2/wiki/Identifying-different-Pano-generations-and-revisions#second-generation-rev-b-g2_b)
 and [Fujitsu DZ22-2](https://github.com/tomverbeure/panologic-g2/wiki/Identifying-different-Pano-generations-and-revisions#fujitsu-zero-client-dz22-2)
-thin clients without a JTAG programer. Unlike my [pano_progfpga](https://github.com/skiphansen/pano_progfpga) project
+thin clients without a JTAG programer. 
+
+Unlike my [pano_progfpga](https://github.com/skiphansen/pano_progfpga) project
 pano_ldr is a bitstream for the Pano which can be co-resident with the user's
-bitstream.
+bitstream. This means that pano_ldr may be used to update the Pano over and
+over as many times as desired.
 
 It is possible to install pano_ldr on a factory stock Pano G2 using [pano_progfpga](https://github.com/skiphansen/pano_progfpga)
 without opening the case.  This is particularly important for owners of the 
@@ -17,35 +20,279 @@ case, the user or both.
 Once pano_ldr has been installed the user can telnet into the Pano and issue 
 commands to update the flash and run applications.
 
-Unlike Pano's progfpga pano_ldr is fast, limited only by the speed of the flash 
-chip itself.  Flashing with pano_ldr over the network should  is just as fast 
-or faster than as using a JTAG programmer.
+Unlike Pano's original progfpga utility pano_ldr is fast, limited only by the 
+speed of the flash chip itself.  Flashing with pano_ldr over the network is just 
+as fast or faster than as using a JTAG programmer.
 
-## Usage
+# Usage
 
 Pano_ldr provides the user with a command line interface (CLI) via a 
-[telnet](https://en.wikipedia.org/wiki/Telnet) connection.  Commands that are 
+[telnet](https://en.wikipedia.org/wiki/Telnet) connection.  Commands are 
 provided for reading and writing flash as well as configuring Pano_ldr to
 automatically boot the user's application on power on or reset.
+
+Files are transferred to and from a specified TFTP server on your network.
 
 ```
 skip@Dell-7040:~/pano/working/panog2_ldr$ telnet pano_ldr
 Trying 192.168.123.196...
 Connected to pano_ldr.lan.
 Escape character is '^]'.
-Pano LDR v0.01 compiled May 14 2022 10:48:14
+Pano LDR v0.01 compiled May 19 2022 16:22:37
 ldr> help
 Commands:
-  auto    - [on | off]
-  bootadr - <flash adr>
-  dump    - <flash adr> <length>
-  erase   - <start adr> <end adr>
-  flash   - <filename> <flash adr>
-  map     - Display blank regions in flash
-  reboot  - <flash adr>
-  reflash - <filename> <flash adr> flash (w/o auto erase)
-  tftp    - <IP adr of tftp server>
-  verify  - <filename> <flash adr>
+  autoboot  - [ on | off]
+  autoerase - [ on | off]
+  bootadr   - <flash adr>
+  dump      - <flash adr> <length>
+  erase     - <start adr> <end adr>
+  flash     - <filename> <flash adr>
+  map       - Display blank regions in flash
+  reboot    - <flash adr>
+  save      - <filename> <flash adr> <length>
+  tftp      - <IP adr of tftp server>
+  verify    - <filename> <flash adr>
+ldr> flash my_project.bin 0x40000
+..............................
+flashed 1974219 bytes
+ldr>
+
+```
+# TFTP server
+
+There are MANY choices for a TFTP servers, personally I use tftpd-hpa on 
+Ubuntu 20.04.  
+
+Please refer to the Internet for instructions on how to install and configure 
+a TFTP server of your choice.
+
+# Auto boot
+
+Once pano_ldr has been installed it is the default bitstream that is loaded 
+following power on or reset.  With the default configuration pano_ldr will 
+initialize the network and then wait for a telnet connection.
+
+Once an application has been installed pano_ldr can be configured to start
+the application automatically (autoboot) if desired.  
+
+When pano_ldr is configured for autoboot instead of initializing the 
+network and waiting for a telnet connection it checks if the Pano button is 
+pressed.  If the button is **NOT** pressed pano_ldr will immediately reload
+the application bitstream, otherwise it will enter normal operation.
+
+The autoboot and bootadr commands are used to configure the auto bootmode.
+
+# Pano_ldr Commands
+
+All arguments can be specified in decimal or hex.  For hex prefix the hex value
+with '0x'.  To save typing commands may be abbreviated.
+
+The "help" command lists available commands for reference.
+
+## Autoboot [on | off]
+
+The autoboot command displays or turns the autoboot feature ON and OFF.
+
+For example:
+```
+ldr> autoboot
+Autoboot off
+ldr> autoboot on
+Autoboot on
+ldr> autoboot off
+Autoboot off
+ldr>
+```
+
+## Autoerase [on | off]
+
+The autoerase command displays or turns the autoerase feature ON and OFF.
+By default autoerase is ON allowing the flash command to erase flash as needed.
+
+By turning autoerase OFF it is possible to flash multiple data blocks into the
+one erase block.  For example firmware for a project might be stored past 
+the end of a bitimage but before the end of the erase block to save some space.
+
+Another usage would be to flash a multiboot header along with pano_ldr at
+the beginning of flash to save almost 256K of flash on a Rev B or almost
+64k on a Rev C.
+
+**NB:** It is strongly advised that the verify command be used after 
+flashing with autoerase turned OFF to ensure that flash is in the desired state.
+Flash write operations can only turn '1' bits into '0' so programming the
+same byte with conflicting value **WILL** result in errors.
+
+**NB:** If flash is completely destroyed it is always possible to fix as long
+as you have backups of the data and you have not power cycled the Pano.  If
+you power cycle the Pano while flash is corrupted enough to prevent pano_ldr
+from starting you will need to use a JTAG programmer to recover.
+
+For example:
+```
+ldr> autoerase
+AutoErase on
+ldr> autoerase off
+AutoErase off
+ldr>
+```
+
+## Bootadr [\<flash adr>]
+
+The bootadr command displays or sets the address of the auto boot bitstream.
+By default bootadr is set to 0x40000 which is the location of the "golden"
+image using stock Pano partitioning.
+
+For example:
+```
+ldr> bootadr
+Autoboot @0x40000
+ldr> bootadr 0x380000
+ldr> bootadr
+Autoboot @0x380000
+ldr>
+```
+
+## Dump \<flash adr> \<length>
+
+The dump command displays the specified range of flash in hex.
+
+For example:
+```
+ldr> dump 0x40000 128
+00040000  ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
+00040010  aa 99 55 66 30 a1 00 07 20 00 31 a1 09 60 31 41
+00040020  3d 00 31 61 09 ee 31 c2 04 01 d0 93 30 e1 00 cf
+00040030  30 c1 00 81 20 00 20 00 20 00 20 00 20 00 20 00
+00040040  20 00 20 00 20 00 20 00 20 00 20 00 20 00 20 00
+00040050  20 00 20 00 20 00 33 81 3c 18 31 81 08 81 34 21
+00040060  00 00 32 01 00 1f 31 e1 ff ff 33 21 00 05 33 41
+00040070  00 04 33 01 01 00 32 61 00 00 32 81 00 00 32 a1
+ldr>
+```
+
+## Erase  \<start adr> \<end adr>
+
+The erase command erases the specified range of flash.  This command does not
+need be use before using the flash command unless autoerase is turned OFF.
+
+The start address must be on an erase boundary and the end address must be 
+one byte less than the next erase boundary.  
+
+For a rev B the erase size is 
+256k or 0x40000, for a rev C it is 64K or 0x10000.
+
+For example on a rev b:
+```
+ldr> map
+M25P128: 16 MB, 256 KB sectors
+0x000000 -> 0x8fffff 9216 K not empty
+0x900000 -> 0xffffff 7168 K empty
+ldr> erase 0x480000 0x4bffff
+.
+Erased 256K
+ldr> map
+M25P128: 16 MB, 256 KB sectors
+0x000000 -> 0x47ffff 4608 K not empty
+0x480000 -> 0x4bffff  256 K empty
+0x4c0000 -> 0x8fffff 4352 K not empty
+0x900000 -> 0xffffff 7168 K empty
+ldr>
+```
+
+## Flash \<filename> \<flash adr>
+
+The flash command programs flash with the specified file from the TFTP server.
+
+If auto erase is on flash is erased automatically as needed.
+
+For compatibility with the stock Pano flash partitioning user applications
+should be flashed at address 0x40000 (the "golden" bitstream) on 
+both generations.
+
+Please see [SPI-Flash-memory-maps](https://github.com/tomverbeure/panologic-g2/wiki/SPI-Flash-memory-maps)
+for details.
+
+For example:
+```
+ldr> flash pano-g2-c.bin 0x40000
+..............................
+
+flashed 1974219 bytes
+ldr>
+```
+
+## Map
+
+The map command scans flash displaying the regions of flash which are
+empty and not empty.
+
+For example on a Rev C Pano with stock partitioning:
+
+```
+ldr> map
+M25P64: 8 MB, 64 KB sectors
+0x000000 -> 0x00ffff   64 K not empty
+0x010000 -> 0x03ffff  192 K empty
+0x040000 -> 0x36ffff 3264 K not empty
+0x370000 -> 0x37ffff   64 K empty
+0x380000 -> 0x6affff 3264 K not empty
+0x6b0000 -> 0x6bffff   64 K empty
+0x6c0000 -> 0x6cffff   64 K not empty
+0x6d0000 -> 0x7fffff 1216 K empty
+```
+
+## Reboot \<flash adr>
+
+The reboot command initiates a FPGA reconfiguration using the bitstream at the 
+specified address.
+
+For example:
+```
+ldr> reboot 0x380000
+Booting bitstream @ 0x380000
+```
+
+## save \<filename> \<flash adr> \<length>
+
+The save command saves a region of flash as a file on the TFTP sever.
+
+For example:
+```
+ldr> save pano-g2-c.bin 0x40000 1974219
+..............................
+Saved 1974219 bytes
+ldr>
+```
+
+## tftp [\<IP adr>]
+
+The tftp command is used display or set the IP address of the TFTP server.  
+The TFTP server MUST be on the same subnet as the Pano.  The TFTP server address 
+is saved in flash.
+
+Note:  By default the TFTP server address is set to the IP address of the first
+telnet connection.  It is only necessary to set the TFTP server address if the
+TFTP server is not on the same machine which is used to telnet in the loader.
+
+For example:
+```
+ldr> tftp
+192.168.123.170
+ldr> tftp 1.2.3.4
+ldr> tftp
+1.2.3.4
+ldr>
+```
+
+## verify \<filename> \<flash adr>
+
+The verify command compares flash with the specified file from the TFTP server.
+
+For example:
+```
+ldr> verify pano-g2-c.bit 0x40000
+..............................
+1974219 bytes verified
 ldr>
 ```
 
@@ -67,7 +314,7 @@ There are two way to install the loader, using a JTAG programmer or over the
 network.
 
 Using a JTAG programmer is the fastest way for a developer who already has
-a JTAG progammer connected. 
+a JTAG programmer connected. 
 
 ## Installation without a JTAG programmer
 
@@ -81,26 +328,91 @@ You should be able to run these programs on a modern X86 Linux by installing
 Alternately they can be run in a VM running a 32 bit version of Linux. 
 If you want to go the VM route start [here](https://www.youtube.com/watch?v=DPkF5EisGDQ), or create a 32 bit Linux VM of your choice.
 
+The pano_ldr is installed as the "multiboot bitstream" so unexpected power
+failures during the update should **NOT** brick the Pano.
+
 The installation procedure is:
 
 * Plug the Pano into your local LAN.
 * Turn it on.
-* Wait for it to obtain an IP address via DHCP.
+* Wait for it to obtain an IP address via DHCP
 * Run install_pano_ldr.sh
-* Verify that you wnat to proceed
-* Cross your fingers and wait as the Pano is updated.  (Go get coffee, 
-this will take a good amount of time).  
+* Verify that you want to proceed
+* Cross your fingers and wait as the Pano is updated.  (Go get coffee, you have time)
 * Power cycle the Pano 
 
-For example:
+Connect the Pano to your LAN then power it on.  Wait for the Pano button to
+turn amber and stop flashing before running the install script.
+
+It takes about 6 minutes to install pano_ldr on a G2 Rev B and about 4 minutes
+on a Rev C.
 
 ```
+skip@Dell-7040:~/pano/working/panog2_ldr$ ./install_pano_ldr.sh 
+Pano IP: 192.168.123.118
+
+Install pano_ldr on Rev B Pano G2 (y/n) ?y
+answer: 'y'
+Running Test = flashFPGA_Series2_Multiboot
+Client connected : IP Addr = 192.168.123.118:8321
+READ CFG reg 0: 0x08010000
+TESTING with board Type = SERIES_II
+FPGA Major Rev = 0801, Minor Rev = 0014 
+SPI ERASE SECTOR 00120000 
+Flash type : LX150look for lx150/multiboot.9nimgSPI ERASE SECTOR 00124000 
+SPI ERASE SECTOR 00128000 
+SPI ERASE SECTOR 0012c000 
+...
+SPI ERASE SECTOR 0022c000 
+Erase took 204.816864 seconds
+finish writing addr=0x00123fc0, 0x00004000 words and 1 sectors
+finish writing addr=0x00127fc0, 0x00008000 words and 2 sectors
+...
+finish writing addr=0x0021ffc0, 0x00100000 words and 64 sectors
+Writing the Start writing multiboot image! consumed 89.843155 seconds
+reading flash & verifing 
+Test has PASSED 
+Disconnecting audio...
+Start writing multiboot image! Image Verified, validation consumed 154.612976 seconds
+Disconnected
+Pano_ldr installed, power cycle the Pano to start it
+skip@Dell-7040:~/pano/working/panog2_ldr$ 
 ```
 
-When progfpga is used to install pano_ldr it will be flashed to the 
-"multiboot bitstream" partition. 
+
+After power cycling the Pano, pano_ldr should run and initialize the network.
+
+The Pano button's LEDs are used to show pano_ldr's network state.
+
+| State | LED |
+| - | - |
+| Ethernet link down | Flashing red |
+| Ethernet link up, IP address not assigned | Flashing blue |
+| IP address assigned by DHCP, not connected | Flashing green |
+| User connected | Solid green |
+
+Once the Pano button begins blinking green you should be able to telnet into
+pano_ldr.
+
+## Determine the Pano's IP address
+
+Pano_ldr's MAC address is 00:1c:02:70:1d:5d. Since this MAC address is 
+different that the MAC address used by the stock bitstream a new IP address 
+should be assigned to the Pano after it reboots.
+
+The DHCP client provides a host name of "pano_ldr" to the DHCP server
+when an IP address is requested.  IF your router provides DNS service for 
+local clients you should be able to telnet into your pano by host name. 
+I use an OpenWRT based router and it provides this service.
+
+If your router doesn't provide DNS for local clients you will need to use 
+determine the Pano's IP address manually.  Most routers will have some way
+of viewing active DHCP leases.  
 
 ## Installation using a JTAG programmer
+
+If already know how to flash .bit files you can find them in the prebuilt 
+subdirectory, otherwise read on.
 
 Install xc3sprog for your system.  If a binary install isn't available for your
 system the original project can be found here: https://sourceforge.net/projects/xc3sprog/.
@@ -130,114 +442,13 @@ revision C before running make or specify it on the make command line.
 Once xc3sprog has been in installed the bit file can be programmed into the 
 Pano's SPI flash by running "make prog_fpga".
 
-## Loader Commands
-
-All arguments can be specifed in decimal or hex.  For hex prefix the hex value
-with '0x'.  To save typing commands may be abbriviated.
-
-The "help" command lists available commands for a quick memory refresh.
-
-## Dump \<flash adr> \<length>
-
-The dump command displays the specified range of flash in hex.
-
-## Erase  \<start adr> \<end adr>
-
-The erase ccommand erases the specified range of flash.  This command does not
-need be use before using the flash command.  
-
-The start address must be on an erase boundary and the end address must be 
-one byte less than the next erase boundary.  
-
-For a rev B the erase size is 
-256k or 0x40000, for a rev C it is 64K or 0x10000.
-
-For example on a rev b:
-```
-ldr> map
-M25P128: 16 MB, 256 KB sectors
-0x000000 -> 0x8fffff 9216 K not empty
-0x900000 -> 0xffffff 7168 K empty
-ldr> erase 0x480000 0x4bffff
-.
-Erased 256K
-ldr> map
-M25P128: 16 MB, 256 KB sectors
-0x000000 -> 0x47ffff 4608 K not empty
-0x480000 -> 0x4bffff  256 K empty
-0x4c0000 -> 0x8fffff 4352 K not empty
-0x900000 -> 0xffffff 7168 K empty
-ldr>
-```
-
-## Reboot \<flash adr>
-
-The reboot command initiates a FPGA reconfiguration using the bitstream at the 
-specified address.
-
-
-## Flash \<filename> \<flash adr>
-
-The flash command programs flash with the specified file from the TFTP server.
-Flash is automatically erased as needed.
-
-## Map
-
-The map command scans flash displaying the regions of flash which are
-empty and not empty.
-
-For example on a Rev C Pano with stock partitioning:
-
-```
-ldr> map
-M25P64: 8 MB, 64 KB sectors
-0x000000 -> 0x00ffff   64 K not empty
-0x010000 -> 0x03ffff  192 K empty
-0x040000 -> 0x36ffff 3264 K not empty
-0x370000 -> 0x37ffff   64 K empty
-0x380000 -> 0x6affff 3264 K not empty
-0x6b0000 -> 0x6bffff   64 K empty
-0x6c0000 -> 0x6cffff   64 K not empty
-0x6d0000 -> 0x7fffff 1216 K empty
-```
-
-## reflash \<filename> \<flash adr>
-
-The reflash command programs flash without erasing it first.  This allows
-multiple files to be programmed into the same erase block. 
-
-## tftp [\<IP adr>]
-
-The tftp command is used display or set the IP address of the TFTP server.  
-The TFTP server MUST be on the same subnet as the Pano.  The TFTP server address 
-is saved in flash 
-
-Note:  By default the TFTP server address is set to the IP address of the first
-telnet connection.  It is only necessary to set the TFTP sever address if the
-TFTP server is not on the same machine which is used to telnet in the loader.
-
-## verify \<filename> \<flash adr>
-
-The verify command compares flash with the specified file from the TFTP server.
-
-## Status LED
-
-The Pano button's LED is used to show pano_ldr's network state.
-
-| State | LED |
-| - | - |
-| Ethernet link down | Flashing red |
-| Ethernet link up, IP address not assigned | Flashing blue |
-| IP address assigned by DHCP, not connected | Flashing green |
-| User connected | Solid green |
-
 ## Erase Boundaries
 
 Flash chips can be read and written in single byte increments, however they
 can only be erased in blocks.  
 
 As a consequence of this the flash commands and erase commands must start
-on an erase boundrary
+on an erase boundary
 
 | Pano | flash size | erase block size | number of blocks |
 | - | - | - | - |
@@ -246,7 +457,7 @@ on an erase boundrary
 
 ## Rev B erase blocks
 
-| Block number | Adress range |
+| Block number | Address range |
 | - | - |
 | 0 | 0x000000 -> 0x03ffff |
 | 1 | 0x040000 -> 0x07ffff |
@@ -257,7 +468,7 @@ on an erase boundrary
 
 ## Rev C erase blocks
 
-| Block number | Adress range |
+| Block number | Address range |
 | - | - |
 | 0 | 0x000000 -> 0x00ffff |
 | 1 | 0x010000 -> 0x01ffff |
@@ -265,159 +476,6 @@ on an erase boundrary
 | ... |
 | 126 | 0x7e0000 -> 0x7effff |
 | 127 | 0x7f0000 -> 0x7fffff |
-
-
-
-|     Byte address     |        usage        | size     |
-|----------------------|---------------------|----------|
-| 0x000000 -> 0x03ffff | multiboot header    | 256k     |
-| 0x040000 -> 0x446534 | golden bitstream    | 4122k    |
-| 0x480000 -> 0x886534 | multiboot bitstream | 4122k    |
-| 0x8c0000 -> 0x8fffff | MAC adr and unknown | 256k     |
-| 0x900000 -> 0x446534 | golden bitstream    | 4122k    |
-| 0x900000 -> 0xd3ffff | User bitstream      | 4122k    |
-| 0xd40000 -> 0xffffff | Unused              | 2816k    |
-
-
-When progfpga is used to install pano_ldr it will be flashed to the 
-"multiboot bitstream" partition. 
-
-
-## Flash Partitioning Schemes
-
-Once pano_ldr has been installed it is possible to repartition the flash 
-to make it more efficient and convenient.  
-
-Using bit stream compression can save a **CONSIDERABLE* amount of flash space,
-for example a compressed bit stream of pano_ldr could occupy ?? flash sectors
-rather than 17.
-
-
-## Flash Partition: Safe
-
-A very conser
-
-|     Byte address     |                   usage        | size  |
-|----------------------|--------------------------------|-------|
-| 0x000000 -> 0x280000 | multiboot header + <br>compressed pano_ldr bitstream  | 2560k|
-| 0x280000 -> 0x2bffff | pano_ldr data                  |  256k |
-| 0x2c0000 -> 0x6fffff | user bitstream (worse case)    | 4122k |
-| 0x700000 -> 0xffffff | spiffs                         | 9216k |
-
-As another example multiple applications could be stored.
-
-|     Byte address     |                   usage        | size  |
-|----------------------|--------------------------------|-------|
-| 0x000000 -> 0x280000 | multiboot header + <br>compressed pano_ldr bitstream  | 2560k|
-| 0x280000 -> 0x2bffff | pano_ldr data                  |  256k |
-| 0x2c0000 -> 0x?????  | user bitstream #1              | ????k |
-| 0x?????? -> 0x?????  | user bitstream #2              | ????k |
-| 0x?????? -> 0x?????  | user bitstream #3              | ????k |
-| 0x?????? -> 0x?????  |            ...                 | ????k |
-| 0x?????? -> 0xffffff | spiffs                         | ????k |
-
-
-## Second Generation rev B (G2) SPI memory map
-
-This device's flash is a 16 megabyte Numonyx M25P128 with a minimum erase size of 256k bytes.
-
-This device's FPGA is a xc6ls150.  The uncompressed bitstream size is 4220212 (0x406534) 
-bytes which requires 17 erase sectors.  
-
-
-|     Byte address     |        usage        | size     | notes |
-|----------------------|---------------------|----------|-------|
-| 0x000000 -> 0x000034 | multiboot header    | 52 bytes |       |
-| 0x000035 -> 0x03ffff | unused              | 255k     |   1   |
-| 0x040000 -> 0x446534 | golden bitstream    | 4122k    |       |
-| 0x446535 -> 0x47ffff | unused              | 230k     |   2   |
-| 0x480000 -> 0x886534 | multiboot bitstream | 4122k    |       |
-| 0x886535 -> 0x8bffff | unused              | 230k     |   3   |
-| 0x8c0000 -> 0x8fffff | MAC adr and unknown | 256k     |   4   |
-| 0x900000 -> 0xffffff | unused              | 7167k    |       |
-
-## Second Generation rev C (G2_C) memory map
-
-This device's flash is a 8 megabyte Numonyx M25P64 with a minimum erase size of 64k bytes.
-
-This device's FPGA is a xc6ls100.  The uncompressed bitstream size is 3317908 (0x32A094)
-bytes which requires 51 erase sectors.  
-
-|     Byte address     |        usage        | size     | notes |
-|----------------------|---------------------|----------|-------|
-| 0x000000 -> 0x000034 | multiboot header    | 52 bytes |       |
-| 0x000035 -> 0x00ffff | unused              | 63k      |   1   |
-| 0x020000 -> 0x03ffff | unused              | 128k     |       |
-| 0x040000 -> 0x36a094 | golden bitstream    | 3240k    |       |
-| 0x36a095 -> 0x36ffff | unused              | 23k      |   2   |
-| 0x370000 -> 0x37ffff | unused              | 64k      |       |
-| 0x380000 -> 0x6aa094 | multiboot bitstream | 3240k    |       |
-| 0x6aa094 -> 0x6affff | unused              | 23k      |   3   |
-| 0x6b0000 -> 0x6bffff | MAC adr and unknown | 64k      |   4   |
-| 0x6c0000 -> 0x7fffff | unused/unknown      | 1280k    |       |
-
-## SPI Flash Memory Map Notes:
-1. These unused bytes are located within the multiboot header erase sector.
-2. These unused bytes are located within a golden bitstream erase sector.
-3. These unused bytes are located within a multiboot bitstream erase sector.
-4. This region contains 232 bytes of mostly unknown data.  The last 3 bytes of 
-the devices MAC address appear to be at offset 0xd in the block.   
-
-
-To program the SPI flash in the Pano and/or to run this project you DO NOT 
-need Xilinx's ISE.
-
-If you would like to modify the firmware you'll also need gcc built for 
-RISC-V RV32IM.
-
-If you would like to modify the RTL you'll also need Xilinx ISE 14.7.
-
-The free Webpack version of Xilinx [ISE 14.7](https://www.xilinx.com/support/download/index.html/content/xilinx/en/downloadNav/vivado-design-tools/archive-ise.html) is used for development.
-Download the latest Windows 10 version which supports the Spartan 6 family of 
-chips used in the second generation Panologic device.
-
-## Serial port 
-
-A serial port is required for debugging.
-
-Please see the [fpga_test_soc](https://github.com/skiphansen/fpga_test_soc/tree/master/fpga/panologic_g2#serial-port) for connection information.
-
-If the serial port you use to interface to the Pano is not /dev/ttyUSB1 then
-you will need to set the "TARGET_PORT" environment variable to point
-to your serial device.
-
-Ultraembedded's SOC platform includes the ability to load firmware over a 
-serial port which is VERY HANDY for code development.
-
-
-### Running
-
-1. If necessary set the "PLATFORM", "CABLE" and "TARGET_PORT" environment 
-   variables as needed for your environment (see above).
-
-2. Run "make load" to load the bitstream into the Pano.
-
-tftp_loader should obtain an IP address from an DHCP on your local LAN.
-It will also respond to pings.
-
-```
-```
-
-### Ethernet Status lights
-
-Note:  The RTL handles Ethernet the link configuration negotiation and it only
-allow full duplex connections at 1000BaseT, 100BaseT and 10BaseT.  MDI/MDIX
-configuration is automatic.  Links WILL NOT be established with half duplex
-hubs/switches (this really shouldn't be an issue).
-
-Looking at the Pano's Ethernet port with the tab up the right LED shows the
-link state
-
-Off - No Link
-Green - 10BaseT connection
-Green/Amber - 100BaseT connection
-Amber - 1000BaseT connection
-
 
 ### Building everything from sources
 
@@ -432,9 +490,9 @@ tried it and don't recommend it.
 
 ## Acknowledgement and Thanks
 This project uses code from several other projects including:
- - (ultraembedded's fpga_test_soc)[https://github.com/ultraembedded/fpga_test_soc.git]
- - (Yol's Ethernet MAC)[https://github.com/yol/ethernet_mac.git]
- - (The Light Weight IP project)[git://git.savannah.gnu.org/lwip.git]
+ - [ultraembedded's fpga_test_soc](https://github.com/ultraembedded/fpga_test_soc.git)
+ - [Yol's Ethernet MAC](https://github.com/yol/ethernet_mac.git)
+ - [The Light Weight IP project](git://git.savannah.gnu.org/lwip.git)
 
 ## Pano Links                          
 
@@ -443,40 +501,6 @@ Links to other Pano logic information can be found on the
 
 ## LEGAL 
 
-My original work (the Pano ethernet_mac glue code) is released under the 
-GNU General Public License, version 2.
+My original work (the Pano ethernet_mac glue code and pano_ldr firmware) is 
+released under the GNU General Public License, version 2.
 
-## Auto boot
-
-Once pano_ldr has been installed it is the default bistream that is loaded 
-following power on or reset.  With the default configuration pano_ldr will 
-initialize the network and then wait for a telnet connection.
-
-Once an applcation has been installed pano_ldr can be configured to start
-the application automatcally (auto boot) if desired.  
-
-When pano_ldr is configured for auto boot instead of initializing the 
-network and waiting for a telnet connection it checks the Pano button and if
-it is **NOT** pressed it immediately boots the usr application.
-
-The _auto_ and _bootadr_ commands are used to configure auto boot mode.
-
-## Auto [on | off]
-
-The auto command turns the auto boot mode on an off.  This command requires
-that the last sector of flash 
-can be used to configure Pano_ldr to automatically boot another
-bitstream without command allows 
-
-## Bootadr [\<flash adr>]
-
-The bootadr command displays or sets the address of the auto boot bitstream.
-
-If the Pano button is NOT pressed then pano_ldr simply causes the "Golden"
-bistream to be loaded and started.  This prevents the need to telnet into
-the loader to start the user's application every time the Pano is turned on.
-
-If the Pano button IS pressed then pano_ldr initializes the Ethernet port, 
-obtains an IP address via DHCP and then waits for a telnet connection.
-
-## Configuration 

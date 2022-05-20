@@ -57,7 +57,7 @@
 #include "lwip/etharp.h"
 #include "netif/ethernet.h"
 #include "tftp_ldr.h"
-#define DEBUG_LOGGING         1
+// #define DEBUG_LOGGING         1
 // #define VERBOSE_DEBUG_LOGGING 1
 #include "log.h"
 
@@ -148,7 +148,7 @@ int NetPrintFillPcb(struct tcp_pcb *tpcb);
 void SendPrompt(void);
 void UpdateLEDs(void);
 int GetAdrAndLen(char **pCmdline,uint32_t *pAdr,uint32_t *pLen);
-int GetFilenameAndAdr(char **pCmdline);
+int GetTftpTransferVals(char **pCmdline,TransferType_t Type);
 bool CheckEmpty(uint32_t Adr,uint32_t PageSize,uint32_t EraseSize);
 int TftpTranserWait(tftp_ldr_internal *p);
 int FlashInternal(char *CmdLine,bool bAutoErase);
@@ -159,28 +159,30 @@ void ReBoot(uint32_t SpiAdr);
 
 const char gVerStr[] = "Pano LDR v0.01 compiled " __DATE__ " " __TIME__ "\r\n";
 
-int AutoCmd(char *CmdLine);
+int AutoBootCmd(char *CmdLine);
+int AutoEraseCmd(char *CmdLine);
 int BootAdrCmd(char *CmdLine);
-int AutoFlashCmd(char *CmdLine);
+int FlashCmd(char *CmdLine);
 int RebootCmd(char *CmdLine);
 int DumpCmd(char *CmdLine);
 int EraseCmd(char *CmdLine);
-int FlashCmd(char *CmdLine);
 int MapCmd(char *CmdLine);
+int SaveCmd(char *CmdLine);
 int TftpCmd(char *CmdLine);
 int VerifyCmd(char *CmdLine);
 
 const CommandTable_t gCmdTable[] = {
-   { "auto   ",  "[on | off]",NULL,AutoCmd},
-   { "bootadr",  "<flash adr>",NULL,BootAdrCmd},
-   { "dump   ",  "<flash adr> <length>",NULL,DumpCmd},
-   { "erase  ",  "<start adr> <end adr>",NULL,EraseCmd},
-   { "flash  ",  "<filename> <flash adr>",NULL,AutoFlashCmd},
-   { "map    ",  "Display blank regions in flash",NULL,MapCmd},
-   { "reboot ",  "<flash adr>",NULL,RebootCmd},
-   { "reflash",  "<filename> <flash adr> flash (w/o auto erase)",NULL,FlashCmd},
-   { "tftp   ",  "<IP adr of tftp server>",NULL,TftpCmd},
-   { "verify ",  "<filename> <flash adr>",NULL,VerifyCmd},
+   { "autoboot ", "[ on | off]",NULL,AutoBootCmd},
+   { "autoerase", "[ on | off]",NULL,AutoEraseCmd},
+   { "bootadr  ",  "<flash adr>",NULL,BootAdrCmd},
+   { "dump     ",  "<flash adr> <length>",NULL,DumpCmd},
+   { "erase    ",  "<start adr> <end adr>",NULL,EraseCmd},
+   { "flash    ",  "<filename> <flash adr>",NULL,FlashCmd},
+   { "map      ",  "Display blank regions in flash",NULL,MapCmd},
+   { "reboot   ",  "<flash adr>",NULL,RebootCmd},
+   { "save     ",  "<filename> <flash adr> <length>",NULL,SaveCmd},
+   { "tftp     ",  "<IP adr of tftp server>",NULL,TftpCmd},
+   { "verify   ",  "<filename> <flash adr>",NULL,VerifyCmd},
    { "?", NULL, NULL, HelpCmd},
    { "help",NULL, NULL, HelpCmd},
    { NULL }  // end of table
@@ -201,6 +203,7 @@ int main(int argc, char *argv[])
     bool bHaveIP = false;
     bool bRanTest = false;
 
+    gTftp.bAutoErase = true;
     ALOG_R(gVerStr);
     CmdParserInit(gCmdTable,NetPrintf);
 
@@ -864,7 +867,7 @@ int EraseCmd(char *CmdLine)
 }
 
 // <filename> <flash adr>
-int FlashInternal(char *CmdLine,bool bAutoErase)
+int FlashCmd(char *CmdLine)
 {
    int Ret = RESULT_BAD_ARG;  // Assume the worse
    err_t Err;
@@ -872,13 +875,9 @@ int FlashInternal(char *CmdLine,bool bAutoErase)
    tftp_ldr_internal *p = &gTftp;
 
    do {
-      p->bAutoErase = bAutoErase;
-      if((Ret = GetFilenameAndAdr(&cp)) != RESULT_OK) {
+      if((Ret = GetTftpTransferVals(&cp,TFTP_TYPE_FLASH)) != RESULT_OK) {
          break;
       }
-      p->MaxBytes = sizeof(gTemp);
-      p->Ram = gTemp;
-      p->TransferType = TFTP_TYPE_FLASH;
       if((Err = ldr_tftp_init(p)) != ERR_OK) {
          NetPrintf("tftp transfer failed %d\n",Err);
          Ret = RESULT_ERR;
@@ -887,23 +886,39 @@ int FlashInternal(char *CmdLine,bool bAutoErase)
 
       Ret = TftpTranserWait(p);
       if(Ret == RESULT_OK) {
-         NetPrintf("\nflashed %d bytes\n",p->BytesTransfered);
+         NetPrintf("\nFlashed %d bytes\n",p->BytesTransfered);
       }
    } while(false);
 
    return Ret;
 }
 
-int FlashCmd(char *CmdLine)
+// <filename> <flash adr> <length>
+int SaveCmd(char *CmdLine)
 {
-   return FlashInternal(CmdLine,false);
-}
+   int Ret = RESULT_BAD_ARG;  // Assume the worse
+   err_t Err;
+   char *cp = CmdLine;
+   tftp_ldr_internal *p = &gTftp;
 
-int AutoFlashCmd(char *CmdLine)
-{
-   return FlashInternal(CmdLine,true);
-}
+   do {
+      if((Ret = GetTftpTransferVals(&cp,TFTP_TYPE_SAVE)) != RESULT_OK) {
+         break;
+      }
+      if((Err = ldr_tftp_init(p)) != ERR_OK) {
+         NetPrintf("tftp transfer failed %d\n",Err);
+         Ret = RESULT_ERR;
+         break;
+      }
 
+      Ret = TftpTranserWait(p);
+      if(Ret == RESULT_OK) {
+         NetPrintf("\nSaved %d bytes\n",p->BytesTransfered);
+      }
+   } while(false);
+
+   return Ret;
+}
 
 int VerifyCmd(char *CmdLine)
 {
@@ -912,12 +927,9 @@ int VerifyCmd(char *CmdLine)
    tftp_ldr_internal *p = &gTftp;
 
    do {
-      if((Ret = GetFilenameAndAdr(&CmdLine)) != RESULT_OK) {
+      if((Ret = GetTftpTransferVals(&CmdLine,TFTP_TYPE_COMPARE)) != RESULT_OK) {
          break;
       }
-      p->MaxBytes = sizeof(gTemp);
-      p->Ram = gTemp;
-      p->TransferType = TFTP_TYPE_COMPARE;
       if((Err = ldr_tftp_init(p))!= ERR_OK) {
          NetPrintf("tftp transfer failed %d:%d\n",Err,gTftp.Error);
       }
@@ -1020,22 +1032,69 @@ void ReBoot(uint32_t SpiAdr)
    REG_WR(GPIO_BASE + REBOOT_ADR,0);
 }
 
-int AutoCmd(char *CmdLine)
+int GetOnOff(char *CmdLine,bool *pOnOff)
 {
    int Ret = RESULT_OK;
-   int On;
-   bool AutoBoot;
 
-   if(!*CmdLine) {
+   *pOnOff = false;
+   if(strcasecmp(CmdLine,"on") == 0) {
+      *pOnOff = true;
    }
-   else if((On = strcmp(CmdLine,"off")) == 0 || strcmp(CmdLine,"on") == 0) {
-      AutoBoot = On ? true : false;
-      AddBoardInfo(TAG_AUTO_BOOT,sizeof(bool),&AutoBoot);
-   }
-   else {
+   else if(strcasecmp(CmdLine,"off") != 0) {
       Ret = RESULT_BAD_ARG;
    }
-   NetPrintf("Autoboot o%s\n",gAutoBoot ? "n":"ff");
+
+   return Ret;
+}
+
+int AutoBootCmd(char *CmdLine)
+{
+   int Ret = RESULT_BAD_ARG;  // assume the worse
+   bool On = false;
+   bool AutoBoot;
+   char *cp;
+
+   do {
+      if(!*CmdLine) {
+         Ret = RESULT_OK;
+         break;
+      }
+      if(GetOnOff(CmdLine,&On)) {
+         break;
+      }
+      Ret = RESULT_OK;
+      AutoBoot = On;
+      AddBoardInfo(TAG_AUTO_BOOT,sizeof(bool),&AutoBoot);
+   } while(false);
+
+   if(Ret == RESULT_OK) {
+      NetPrintf("Autoboot o%s\n",gAutoBoot ? "n":"ff");
+   }
+
+   return Ret;
+}
+
+int AutoEraseCmd(char *CmdLine)
+{
+   int Ret = RESULT_BAD_ARG;  // assume the worse
+   bool On = false;
+
+   do {
+      if(!*CmdLine) {
+         Ret = RESULT_OK;
+         break;
+      }
+
+      if(GetOnOff(CmdLine,&On)) {
+         break;
+      }
+      Ret = RESULT_OK;
+      gTftp.bAutoErase = On;
+   } while(false);
+
+   if(Ret == RESULT_OK) {
+      NetPrintf("AutoErase o%s\n",gTftp.bAutoErase ? "n":"ff");
+   }
 
    return Ret;
 }
@@ -1118,7 +1177,7 @@ int GetAdrAndLen(char **pCmdline,uint32_t *pAdr,uint32_t *pLen)
 
 // Parse command line: <filename> <flash adr>
 // Saving filename and flash adr in gTftp
-int GetFilenameAndAdr(char **pCmdLine)
+int GetTftpTransferVals(char **pCmdLine,TransferType_t Type)
 {
    int Ret = RESULT_BAD_ARG;
    char *cp = *pCmdLine;
@@ -1150,6 +1209,14 @@ int GetFilenameAndAdr(char **pCmdLine)
          break;
       }
 
+      if(Type == TFTP_TYPE_SAVE) {
+         if(ConvertValue(&cp,&gTftp.SendLen)) {
+            break;
+         }
+      }
+      p->MaxBytes = sizeof(gTemp);
+      p->Ram = gTemp;
+      p->TransferType = Type;
       Ret = RESULT_OK;
    } while(false);
 
@@ -1187,12 +1254,14 @@ int TftpTranserWait(tftp_ldr_internal *p)
       if((p->BytesTransfered - p->LastProgress) > PROGRESS_SIZE) {
          p->LastProgress += PROGRESS_SIZE;
          if(BytesOnLine++ > 64) {
+            BytesOnLine = 0;
             NetPrintf("\n");
          }
          NetPrintf(".");
       }
    }
    if(BytesOnLine > 0) {
+      BytesOnLine = 0;
       NetPrintf("\n");
    }
    tftp_cleanup();
@@ -1218,7 +1287,7 @@ uint32_t GetDataPageOffset()
 
    if(p->FlashSize == (8*1024*1024)) {
    // 8 Mbyte chip
-      DataPageOffset = 0x6b0000;
+      DataPageOffset = 0x6c0000;
    }
    else if(p->FlashSize == (16*1024*1024)) {
    // 16 Mbyte chip
@@ -1272,7 +1341,7 @@ uint32_t *ParseDataBlock()
          }
          PanoInfo++;
       }
-      break;
+
       if(gBoardID == 0) {
       // Not a valid Pano info block, the BoardID is always present
          break;
@@ -1336,8 +1405,8 @@ void AddBoardInfo(Tag_t Tag,size_t Len,void *TagData)
          *pU32++ = (uint32_t) Tag;
          *pU32++ = (uint32_t) Len;
          memcpy(pU32,TagData,Len);
-         LOG("Write %d bytes of data @ 0x%x\n",EntryLen,WriteOffset);
-         LOG_HEX(gTemp,WriteOffset + EntryLen);
+         // LOG("Write %d bytes of data @ 0x%x\n",EntryLen,WriteOffset);
+         // LOG_HEX(gTemp,WriteOffset + EntryLen);
          WriteOffset += GetDataPageOffset();
 
          spi_write(WriteOffset,(uint8_t *)pFirstUnused,EntryLen);

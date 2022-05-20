@@ -78,8 +78,29 @@ static void tftp_close(void* handle)
 // tftp put
 static int tftp_read(void *handle,void *Buf, int Len)
 {
-   ELOG("\n");
-   return -1;
+   tftp_ldr_internal *p = (tftp_ldr_internal *) handle;
+   int Ret;
+   LOG("Called, Len %d\n",Len);
+
+   if(p->TransferType == TFTP_TYPE_SAVE) {
+      uint32_t Adr = p->FlashAdr + p->BytesTransfered;
+      uint32_t Bytes2Read = Len;
+
+      if(p->BytesTransfered + Len > p->SendLen) {
+         Len = p->SendLen - p->BytesTransfered;
+      }
+
+      spi_read(p->FlashAdr + p->BytesTransfered,(uint8_t *) Buf,Len);
+      p->BytesTransfered += Len;
+      Ret = Len;
+   }
+   else {
+      ELOG("Internal err\n");
+      Ret = -1;
+   }
+
+   LOG("Returning %d\n",Ret);
+   return Ret;
 }
 
 static int tftp_write(void *handle, struct pbuf *pBuf)
@@ -121,8 +142,8 @@ static int tftp_write(void *handle, struct pbuf *pBuf)
                spi_erase(p->LastEraseAdr,pInfo->EraseSize);
             }
 
-            LOG("flash %d @ 0x%x\n",BufLen,p->FlashAdr + p->BytesTransfered);
-            spi_write(p->FlashAdr + p->BytesTransfered,pBuf->payload,BufLen);
+            LOG("flash %d @ 0x%x\n",BufLen,Adr);
+            spi_write(Adr,pBuf->payload,BufLen);
             break;
          }
 
@@ -195,7 +216,7 @@ err_t ldr_tftp_init(tftp_ldr_internal *p)
 {
    err_t Err;
    const char *Filename;
-   const char *TransferTypes[] = { "read", "flash","compar" };
+   const char *TransferTypes[] = { "read", "flash","compar","sav" };
 
    do {
       if(p == NULL || p->ServerIP.addr == 0 || p->Filename == NULL ||
@@ -208,6 +229,7 @@ err_t ldr_tftp_init(tftp_ldr_internal *p)
       p->LastEraseAdr = INVALID_FLASH_ADR;
       p->BytesTransfered = 0;
       p->LastProgress = 0;
+      p->ErrMsg[0] = 0;
 
       if((Err = tftp_init_client(&tftp)) != ERR_OK) {
          ELOG("tftp_init_client failed %d\n",Err);
@@ -217,9 +239,14 @@ err_t ldr_tftp_init(tftp_ldr_internal *p)
       LOG("%sing %s @ 0x%x\n",
           TransferTypes[p->TransferType - 1],Filename,p->FlashAdr);
 
-      Err = tftp_get(p,&p->ServerIP,TFTP_PORT,Filename,TFTP_MODE_OCTET);
+      if(p->TransferType == TFTP_TYPE_SAVE) {
+         Err = tftp_put(p,&p->ServerIP,TFTP_PORT,Filename,TFTP_MODE_OCTET);
+      }
+      else {
+         Err = tftp_get(p,&p->ServerIP,TFTP_PORT,Filename,TFTP_MODE_OCTET);
+      }
       if(Err != ERR_OK) {
-         ELOG("tftp_get failed %d\n",Err);
+         ELOG("failed %d\n",Err);
          break;
       }
       p->Error = TFTP_IN_PROGRESS;

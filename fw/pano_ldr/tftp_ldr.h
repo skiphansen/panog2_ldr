@@ -9,8 +9,9 @@ typedef enum {
    TFTP_TYPE_RAM = 1,
    TFTP_TYPE_FLASH,
    TFTP_TYPE_COMPARE,
+   TFTP_TYPE_SAVE
 } TransferType_t;
-#define TFTP_TYPE_LAST  TFTP_TYPE_COMPARE
+#define TFTP_TYPE_LAST  TFTP_TYPE_SAVE
 
 
 typedef enum {
@@ -30,6 +31,7 @@ typedef struct {
    char ErrMsg[MAX_ERR_MSG_LEN + 1];
    int BytesTransfered;
    int MaxBytes;
+   uint32_t SendLen;
    TransferType_t TransferType;
    char *Ram;
    uint32_t FlashAdr;
