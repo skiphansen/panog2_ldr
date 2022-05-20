@@ -84,7 +84,7 @@ The autoboot and bootadr commands are used to configure the auto bootmode.
 
 # Pano_ldr Commands
 
-All arguments can be specified in decimal or hex.  For hex prefix the hex value
+All arguments can be specified in either decimal or hex.  For hex prefix the hex value
 with '0x'.  To save typing commands may be abbreviated.
 
 The "help" command lists available commands for reference.
@@ -122,10 +122,10 @@ flashing with autoerase turned OFF to ensure that flash is in the desired state.
 Flash write operations can only turn '1' bits into '0' so programming the
 same byte with conflicting value **WILL** result in errors.
 
-**NB:** If flash is completely destroyed it is always possible to fix as long
-as you have backups of the data and you have not power cycled the Pano.  If
-you power cycle the Pano while flash is corrupted enough to prevent pano_ldr
-from starting you will need to use a JTAG programmer to recover.
+**NB:** Even if flash is completely corrupted it is always possible to fix it
+as long as you have backups of the data and you have not power cycled the Pano.
+If you power cycle the Pano while flash is corrupted enough to prevent pano_ldr
+or the "Golden" from starting you will need to use a JTAG programmer to recover.
 
 For example:
 ```
@@ -140,7 +140,7 @@ ldr>
 
 The bootadr command displays or sets the address of the auto boot bitstream.
 By default bootadr is set to 0x40000 which is the location of the "golden"
-image using stock Pano partitioning.
+image on a stock Pano.
 
 For example:
 ```
@@ -173,10 +173,10 @@ ldr>
 ## Erase  \<start adr> \<end adr>
 
 The erase command erases the specified range of flash.  This command does not
-need be use before using the flash command unless autoerase is turned OFF.
+need be used before using the flash command unless autoerase is turned OFF.
 
-The start address must be on an erase boundary and the end address must be 
-one byte less than the next erase boundary.  
+The start address must be on an [erase boundary](https://github.com/skiphansen/panog2_ldr/edit/master/README.md#erase-boundaries)
+and the end address must be one byte less than the next erase boundary.  
 
 For a rev B the erase size is 
 256k or 0x40000, for a rev C it is 64K or 0x10000.
@@ -202,12 +202,13 @@ ldr>
 ## Flash \<filename> \<flash adr>
 
 The flash command programs flash with the specified file from the TFTP server.
+The start address must be on an [erase boundary](https://github.com/skiphansen/panog2_ldr/edit/master/README.md#erase-boundaries)
+unless autoerase is turned OFF.
 
-If auto erase is on flash is erased automatically as needed.
+If autoerase is on flash is erased automatically as needed.
 
 For compatibility with the stock Pano flash partitioning user applications
-should be flashed at address 0x40000 (the "golden" bitstream) on 
-both generations.
+can be flashed as the "golden" bitstream at address 0x40000.
 
 Please see [SPI-Flash-memory-maps](https://github.com/tomverbeure/panologic-g2/wiki/SPI-Flash-memory-maps)
 for details.
@@ -406,7 +407,7 @@ local clients you should be able to telnet into your pano by host name.
 I use an OpenWRT based router and it provides this service.
 
 If your router doesn't provide DNS for local clients you will need to use 
-determine the Pano's IP address manually.  Most routers will have some way
+determine the Pano's IP address manually.  All routers should have some way
 of viewing active DHCP leases.  
 
 ## Installation using a JTAG programmer
@@ -477,7 +478,7 @@ on an erase boundary
 | 126 | 0x7e0000 -> 0x7effff |
 | 127 | 0x7f0000 -> 0x7fffff |
 
-### Building everything from sources
+# Building everything from sources
 
 **NB:** While it may be possible to use Windows for development I haven't 
 tried it and don't recommend it.
@@ -487,19 +488,21 @@ tried it and don't recommend it.
 3. Make sure the RISC-V GCC (built for RV32IM) is in the PATH.
 4. Run "make build_all" or "make PLATFORM=pano-g2-c build_all".
 
+The output from the build will be in the prebuilt subdirectory name
+pano-g2.bit or pano-g2-c.bit.
 
-## Acknowledgement and Thanks
+# Acknowledgement and Thanks
 This project uses code from several other projects including:
  - [ultraembedded's fpga_test_soc](https://github.com/ultraembedded/fpga_test_soc.git)
  - [Yol's Ethernet MAC](https://github.com/yol/ethernet_mac.git)
- - [The Light Weight IP project](git://git.savannah.gnu.org/lwip.git)
+ - [The Light Weight IP project](https://savannah.nongnu.org/projects/lwip)
 
-## Pano Links                          
+# Pano Links                          
 
 Links to other Pano logic information can be found on the 
 [Pano Logic Hackers wiki](https://github.com/tomverbeure/panologic-g2/wiki)
 
-## LEGAL 
+# LEGAL 
 
 My original work (the Pano ethernet_mac glue code and pano_ldr firmware) is 
 released under the GNU General Public License, version 2.
