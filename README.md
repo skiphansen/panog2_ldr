@@ -497,6 +497,15 @@ tried it and don't recommend it.
 The output from the build will be in the prebuilt subdirectory name
 pano-g2.bit or pano-g2-c.bit.
 
+## Serial port (Optional)
+
+Pano_ldr is based on Ultraembedded's SOC platform which includes the ability to 
+load firmware over a serial port which is VERY HANDY for code development.  I 
+strongly suggest building a serial cable to allow the capability to be used if
+you are interested in modifying the firmware.
+
+Please see the [fpga_test_soc](https://github.com/skiphansen/fpga_test_soc/tree/master/fpga/panologic_g2#serial-port) for more information.
+
 # Acknowledgement and Thanks
 This project uses code from several other projects including:
  - [ultraembedded's fpga_test_soc](https://github.com/ultraembedded/fpga_test_soc.git)
