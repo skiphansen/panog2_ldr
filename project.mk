@@ -20,6 +20,12 @@ EXTRA_CFLAGS += -DCONFIG_SPILITE_BASE=0x93000000
 # Create .d dependency files
 EXTRA_CFLAGS += -DMD
 
+ifeq ($(PLATFORM),pano-g2-c)
+PROG_FPGA_OFFSET = 3670016
+else
+PROG_FPGA_OFFSET = 4718592
+endif
+
 include $(TOPDIR)/pano/make/common.mk
 
 

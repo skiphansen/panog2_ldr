@@ -1,6 +1,6 @@
 .PHONY: help build_all prog_fpga clean_all start_console run
 
-INIT_APP := fw/pano_mon
+INIT_APP := fw/pano_ldr
 
 help:
 	@echo "Usage:"
@@ -36,4 +36,7 @@ run:
 
 load:
 	make -C $(INIT_APP) load
+
+reset:
+	make -C fpga reset
 
