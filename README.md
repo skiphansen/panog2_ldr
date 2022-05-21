@@ -75,10 +75,10 @@ initialize the network and then wait for a telnet connection.
 Once an application has been installed pano_ldr can be configured to start
 the application automatically (autoboot) if desired.  
 
-When pano_ldr is configured for autoboot instead of initializing the 
-network and waiting for a telnet connection it checks if the Pano button is 
-pressed.  If the button is **NOT** pressed pano_ldr will immediately reload
-the application bitstream, otherwise it will enter normal operation.
+When autoboot is enabled instead of initializing the network and waiting for a 
+telnet connection it checks if the Pano button is pressed.  If the button 
+is **NOT** pressed pano_ldr will immediately reload the application bitstream, 
+otherwise it will enter normal operation.
 
 The autoboot and bootadr commands are used to configure the auto bootmode.
 
@@ -104,7 +104,7 @@ Autoboot off
 ldr>
 ```
 
-DZ22-2 note:  Do not turn ON autoboot for on the DZ22-2, it is unknown
+DZ22-2 note:  Do not turn ON autoboot on the DZ22-2, it is unknown
 how the "Pano button" is handled on the DZ22.
 
 ## Autoerase [on | off]
@@ -178,7 +178,7 @@ ldr>
 The erase command erases the specified range of flash.  This command does not
 need be used before using the flash command unless autoerase is turned OFF.
 
-The start address must be on an [erase boundary](https://github.com/skiphansen/panog2_ldr/edit/master/README.md#erase-boundaries)
+The start address must be on an [erase boundary](https://github.com/skiphansen/panog2_ldr#erase-boundaries)
 and the end address must be one byte less than the next erase boundary.  
 
 For a rev B the erase size is 
@@ -205,7 +205,7 @@ ldr>
 ## Flash \<filename> \<flash adr>
 
 The flash command programs flash with the specified file from the TFTP server.
-The start address must be on an [erase boundary](https://github.com/skiphansen/panog2_ldr/edit/master/README.md#erase-boundaries)
+The start address should be on an [erase boundary](https://github.com/skiphansen/panog2_ldr#erase-boundaries)
 unless autoerase is turned OFF.
 
 If autoerase is on flash is erased automatically as needed.
@@ -418,7 +418,7 @@ of viewing active DHCP leases.
 
 ## Installation using a JTAG programmer
 
-If already know how to flash .bit files you can find them in the prebuilt 
+If you already know how to flash .bit files you can find them in the prebuilt 
 subdirectory, otherwise read on.
 
 Install xc3sprog for your system.  If a binary install isn't available for your
@@ -521,4 +521,3 @@ Links to other Pano logic information can be found on the
 
 My original work (the Pano ethernet_mac glue code and pano_ldr firmware) is 
 released under the GNU General Public License, version 2.
-
