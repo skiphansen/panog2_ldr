@@ -210,8 +210,8 @@ unless autoerase is turned OFF.
 
 If autoerase is on flash is erased automatically as needed.
 
-For compatibility with the stock Pano flash partitioning user applications
-can be flashed as the "golden" bitstream at address 0x40000.
+For compatibility with the stock Pano flash partitioning it is suggested that
+user applications be flashed at address 0x900000 for rev B and at address 0x40000 for rev C. 
 
 Please see [SPI-Flash-memory-maps](https://github.com/tomverbeure/panologic-g2/wiki/SPI-Flash-memory-maps)
 for details.
