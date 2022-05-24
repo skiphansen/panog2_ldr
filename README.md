@@ -300,6 +300,13 @@ ldr> verify pano-g2-c.bit 0x40000
 ldr>
 ```
 
+## Persistant Data storage
+
+Pano_ldr saves the autoboot enable flag, autoboot address and TFTP server address
+in the [Pano data block](https://github.com/tomverbeure/panologic-g2/wiki/Pano-Data-Block).
+To prevent clobbering user data Pano_ldr will not save its data unless valid Pano data is detected
+in the data block.
+
 ## HW Requirements
 
 * A Pano Logic G2 (the one with a DVI port) or a DZ22-2
