@@ -38,10 +38,10 @@ skip@Dell-7040:~/pano/working/panog2_ldr$ telnet pano_ldr
 Trying 192.168.123.196...
 Connected to pano_ldr.lan.
 Escape character is '^]'.
-Pano LDR v0.01 compiled May 19 2022 16:22:37
+Pano LDR v0.02 compiled May 28 2022 10:49:09
 ldr> help
 Commands:
-  autoboot  - [ on | off]
+  autoboot  - [ on | off | delayed ]
   autoerase - [ on | off]
   bootadr   - <flash adr>
   dump      - <flash adr> <length>
@@ -76,9 +76,18 @@ Once an application has been installed pano_ldr can be configured to start
 the application automatically (autoboot) if desired.  
 
 When autoboot is enabled instead of initializing the network and waiting for a 
-telnet connection it checks if the Pano button is pressed.  If the button 
-is **NOT** pressed pano_ldr will immediately reload the application bitstream, 
-otherwise it will enter normal operation.
+telnet connection pano_ldr checks if the Pano button is pressed.  If the button 
+is pressed pano_ldr will enter normal operation, otherwise it will load the 
+application bitstream.
+
+A delayed autoboot mode is provided for the DZ22-2 which lacks a dedicated Pano 
+button.  When the delayed mode is enabled pano_ldr will wait for 3 seconds for 
+a "button" press before autobooting the application.  
+
+This allows pano_ldr to be entered on a DZ22-2 from power off by slowly 
+clicking the power button twice. The first click turns on the DZ22-2, the 
+second click causes the LCD controller to send a Pano Button press to the 
+Pano which causes pano_ldr to abort the autoboot and begin normal operation.
 
 The autoboot and bootadr commands are used to configure the auto bootmode.
 
@@ -89,9 +98,15 @@ with '0x'.  To save typing commands may be abbreviated.
 
 The "help" command lists available commands for reference.
 
-## Autoboot [on | off]
+## Autoboot [on | off | delayed]
 
-The autoboot command displays or turns the autoboot feature ON and OFF.
+The autoboot command displays or sets the autoboot mode.
+
+| Mode | Action |
+| - | - |
+| Off | Pano_ldr initializes the network and waits for a connection. |
+| On | If the Pano button is not pressed pano_ldr initializes the network and waits for a connection. |
+| Delayed | Pano_ldr waits for the Pano button to be pressed for 3 seconds.  If the Pano button is not pressed then it will initialize the network and wait for a connection. |
 
 For example:
 ```
@@ -99,17 +114,17 @@ ldr> autoboot
 Autoboot off
 ldr> autoboot on
 Autoboot on
+ldr> autoboot delayed
+Autoboot delayed
 ldr> autoboot off
 Autoboot off
 ldr>
 ```
 
-DZ22-2 note:  Do not turn ON autoboot on the DZ22-2, it is unknown
-how the "Pano button" is handled on the DZ22.
-
 ## Autoerase [on | off]
 
 The autoerase command displays or turns the autoerase feature ON and OFF.
+
 By default autoerase is ON allowing the flash command to erase flash as needed.
 
 By turning autoerase OFF it is possible to flash multiple data blocks into the
@@ -127,8 +142,9 @@ same byte with conflicting value **WILL** result in errors.
 
 **NB:** Even if flash is completely corrupted it is always possible to fix it
 as long as you have backups of the data and you have not power cycled the Pano.
-If you power cycle the Pano while flash is corrupted enough to prevent pano_ldr
-or the "Golden" from starting you will need to use a JTAG programmer to recover.
+If you power cycle the Pano while flash is corrupted enough to prevent both
+pano_ldr and the "Golden" from starting you will need to use a JTAG programmer 
+to recover.
 
 For example:
 ```
@@ -274,9 +290,8 @@ The tftp command is used display or set the IP address of the TFTP server.
 The TFTP server MUST be on the same subnet as the Pano.  The TFTP server address 
 is saved in flash.
 
-Note:  By default the TFTP server address is set to the IP address of the first
-telnet connection.  It is only necessary to set the TFTP server address if the
-TFTP server is not on the same machine which is used to telnet in the loader.
+Note:  TFTP server address is set to the IP address of the telnet connection 
+unless it has been set previously.
 
 For example:
 ```
@@ -302,10 +317,9 @@ ldr>
 
 ## Persistant Data storage
 
-Pano_ldr saves the autoboot enable flag, autoboot address and TFTP server address
-in the [Pano data block](https://github.com/tomverbeure/panologic-g2/wiki/Pano-Data-Block).
-To prevent clobbering user data Pano_ldr will not save its data unless valid Pano data is detected
-in the data block.
+Pano_ldr saves its configuration in the flash's last erase block. To prevent 
+clobbering user data Pano_ldr will not save its data unless valid 
+pano_ldr data is is detected in the block or the block is empty.
 
 ## HW Requirements
 
@@ -314,7 +328,6 @@ in the data block.
 
 ## Software Requirements
 
-* GNU make
 * Host (or VM) capable of running 32 bit Linux programs
 * DHCP server somewhere on the LAN
 * TFTP server somewhere on the LAN
@@ -332,12 +345,14 @@ a JTAG programmer connected.
 A script that uses Pano update utilities which have been patched by the 
 [pano_progfpga](https://github.com/skiphansen/pano_progfpga) project is
 provide to install pano_ldr of the network.  The Pano update utilities are 32 
-bit Linux x86 programs that can be run on  any OS that can run 32 bit Linux binaries.  
+bit Linux x86 programs that can be run on  any OS that can run 32 bit Linux 
+binaries.  
 
 You should be able to run these programs on a modern X86 Linux by installing
 [32 bit libraries](https://linuxconfig.org/unable-to-find-a-suitable-destination-to-install-32-bit-compatibility-libraries-on-ubuntu-18-04-bionic-beaver-linux).
 Alternately they can be run in a VM running a 32 bit version of Linux. 
-If you want to go the VM route start [here](https://www.youtube.com/watch?v=DPkF5EisGDQ), or create a 32 bit Linux VM of your choice.
+If you want to go the VM route start [here](https://www.youtube.com/watch?v=DPkF5EisGDQ), 
+or create a 32 bit Linux VM of your choice.
 
 The pano_ldr is installed as the "multiboot bitstream" so unexpected power
 failures during the update should **NOT** brick the Pano.
@@ -352,8 +367,15 @@ The installation procedure is:
 * Cross your fingers and wait as the Pano is updated.  (Go get coffee, you have time)
 * Power cycle the Pano 
 
-Connect the Pano to your LAN then power it on.  Wait for the Pano button to
-turn amber and stop flashing before running the install script.
+Connect the Pano to your LAN then power it on.  
+
+Pano2:
+
+Wait for the Pano button to turn amber and stop flashing before running the 
+install script.  
+
+DZ22-2:
+Wait until the power switch blinks amber slowly.
 
 It takes about 6 minutes to install pano_ldr on a G2 Rev B and about 4 minutes
 on a Rev C.
@@ -405,8 +427,8 @@ The Pano button's LEDs are used to show pano_ldr's network state.
 Once the Pano button begins blinking green you should be able to telnet into
 pano_ldr.
 
-DZ22-2 note: The LED on the DZ22-2 is not directly controlled by the Pano so no useful
-status will be displayed.
+DZ22-2 note: The LED on the DZ22-2 is not directly controlled by the Pano so no 
+useful status will be displayed.
 
 ## Determine the Pano's IP address
 

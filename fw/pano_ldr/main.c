@@ -104,6 +104,13 @@ typedef struct {
 
 #define GOLDEN_IMAGE_ADR   0x40000
 
+#define AUTOBOOT_OFF       0
+#define AUTOBOOT_ON        1
+#define AUTOBOOT_DELAYED   2
+
+// How long to wait for button press in milliseconds
+#define AUTO_BOOT_DELAY    3000
+
 NetPrintInternal_t gNetPrint;
 struct tcp_pcb *gTcpCon;
 
@@ -128,9 +135,10 @@ bool gInputReady;
 tftp_ldr_internal gTftp;
 char gTemp[1024];
 uint32_t gEthStatus;
-bool gAutoBoot;
+int gAutoBoot;
 uint32_t gAutoBootAdr = GOLDEN_IMAGE_ADR;
 uint32_t gBoardID;
+const char DelayedStr[] = "delayed";
 
 void ClearRxFifo(void);
 err_t pano_netif_init(struct netif *netif);
@@ -152,12 +160,12 @@ int GetTftpTransferVals(char **pCmdline,TransferType_t Type);
 bool CheckEmpty(uint32_t Adr,uint32_t PageSize,uint32_t EraseSize);
 int TftpTranserWait(tftp_ldr_internal *p);
 int FlashInternal(char *CmdLine,bool bAutoErase);
-uint32_t GetDataPageOffset(void);
-uint32_t *ParseDataBlock(void);
+uint32_t ParseDataBlock(void);
 void AddBoardInfo(Tag_t Tag,size_t Len,void *TagData);
+int ButtonPressed(void);
 void ReBoot(uint32_t SpiAdr);
 
-const char gVerStr[] = "Pano LDR v0.01 compiled " __DATE__ " " __TIME__ "\r\n";
+const char gVerStr[] = "Pano LDR v0.02 compiled " __DATE__ " " __TIME__ "\r\n";
 
 int AutoBootCmd(char *CmdLine);
 int AutoEraseCmd(char *CmdLine);
@@ -172,7 +180,7 @@ int TftpCmd(char *CmdLine);
 int VerifyCmd(char *CmdLine);
 
 const CommandTable_t gCmdTable[] = {
-   { "autoboot ", "[ on | off]",NULL,AutoBootCmd},
+   { "autoboot ", "[ on | off | delayed ]",NULL,AutoBootCmd},
    { "autoerase", "[ on | off]",NULL,AutoEraseCmd},
    { "bootadr  ",  "<flash adr>",NULL,BootAdrCmd},
    { "dump     ",  "<flash adr> <length>",NULL,DumpCmd},
@@ -193,106 +201,109 @@ const CommandTable_t gCmdTable[] = {
 //-----------------------------------------------------------------
 int main(int argc, char *argv[])
 {
-    int i;
-    unsigned char Buf[256];
-    int Id = 0;
-    uint32_t Temp;
-    uint32_t NewEthStatus;
-    uint8_t Byte;
-    uint16_t Count;
-    bool bHaveIP = false;
-    bool bRanTest = false;
+   int i;
+   unsigned char Buf[256];
+   int Id = 0;
+   uint32_t Temp;
+   uint32_t NewEthStatus;
+   uint8_t Byte;
+   uint16_t Count;
+   bool bHaveIP = false;
+   bool bRanTest = false;
 
-    gTftp.bAutoErase = true;
-    ALOG_R(gVerStr);
-    CmdParserInit(gCmdTable,NetPrintf);
+   gTftp.bAutoErase = true;
+   ALOG_R(gVerStr);
+   CmdParserInit(gCmdTable,NetPrintf);
 
 // Set LED GPIO's to output
-    Temp = REG_RD(GPIO_BASE + GPIO_DIRECTION);
-    Temp |= GPIO_BIT_RED_LED|GPIO_BIT_GREEN_LED|GPIO_BIT_BLUE_LED;
-    REG_WR(GPIO_BASE + GPIO_DIRECTION,Temp);
-    REG_WR(GPIO_BASE + GPIO_OUTPUT,0);
+   Temp = REG_RD(GPIO_BASE + GPIO_DIRECTION);
+   Temp |= GPIO_BIT_RED_LED|GPIO_BIT_GREEN_LED|GPIO_BIT_BLUE_LED;
+   REG_WR(GPIO_BASE + GPIO_DIRECTION,Temp);
+   REG_WR(GPIO_BASE + GPIO_OUTPUT,0);
 
-    spi_init(CONFIG_SPILITE_BASE);
-    spi_chip_init();
+   spi_init(CONFIG_SPILITE_BASE);
+   spi_chip_init();
 
-    ParseDataBlock();
-    if(gAutoBoot) {
-       if(REG_RD(GPIO_BASE + GPIO_INPUT) & GPIO_BIT_PANO_BUTTON) {
-          ReBoot(gAutoBootAdr);
-       }
-       else {
-          LOG_R("Pano switch pressed\n");
-       }
-    }
+   ParseDataBlock();
+   if(gAutoBoot == AUTOBOOT_ON && !ButtonPressed()) {
+   // auto boot now
+      ReBoot(gAutoBootAdr);
+   }
+   else if(gAutoBoot == AUTOBOOT_DELAYED) {
+      while(!ButtonPressed()) {
+         if(timer_now() > AUTO_BOOT_DELAY) {
+            ReBoot(gAutoBootAdr);
+         }
+      }
+   }
 
-    lwip_init();
-    init_default_netif();
-    TcpInit();
-    ClearRxFifo();
+   lwip_init();
+   init_default_netif();
+   TcpInit();
+   ClearRxFifo();
 
-    for(; ; ) {
-       UpdateLEDs();
-       pano_netif_poll();
-       NewEthStatus = ETH_STATUS & (ETH_STATUS_LINK_UP | ETH_STATUS_LINK_SPEED);
-       if(gEthStatus != NewEthStatus) {
-          VLOG_R("Ethernet Status: 0x%x\n",ETH_STATUS);
-          gEthStatus = NewEthStatus;
-          ALOG_R("Ethernet link is %s",
-                 (gEthStatus & ETH_STATUS_LINK_UP) ? "up" : "down");
-          if(gEthStatus & ETH_STATUS_LINK_UP) {
-             ALOG_R(", ");
-             switch(gEthStatus & ETH_STATUS_LINK_SPEED) {
-                case SPEED_1000MBPS:
-                   ALOG_R("1000BaseT");
-                   break;
+   for(; ; ) {
+      UpdateLEDs();
+      pano_netif_poll();
+      NewEthStatus = ETH_STATUS & (ETH_STATUS_LINK_UP | ETH_STATUS_LINK_SPEED);
+      if(gEthStatus != NewEthStatus) {
+         VLOG_R("Ethernet Status: 0x%x\n",ETH_STATUS);
+         gEthStatus = NewEthStatus;
+         ALOG_R("Ethernet link is %s",
+                (gEthStatus & ETH_STATUS_LINK_UP) ? "up" : "down");
+         if(gEthStatus & ETH_STATUS_LINK_UP) {
+            ALOG_R(", ");
+            switch(gEthStatus & ETH_STATUS_LINK_SPEED) {
+               case SPEED_1000MBPS:
+                  ALOG_R("1000BaseT");
+                  break;
 
-                case SPEED_100MBPS:
-                   ALOG_R("100BaseT");
-                   break;
+               case SPEED_100MBPS:
+                  ALOG_R("100BaseT");
+                  break;
 
-                case SPEED_10MBPS:
-                   ALOG_R("10BaseT");
-                   break;
+               case SPEED_10MBPS:
+                  ALOG_R("10BaseT");
+                  break;
 
-                case SPEED_UNSPECIFIED:
-                   ALOG_R("?");
-                   break;
+               case SPEED_UNSPECIFIED:
+                  ALOG_R("?");
+                  break;
 
-                default:
-                   ALOG_R("WTF?");
-                   break;
-             }
-             netif_set_link_up(&gNetif);
-          }
-          else {
-             netif_set_link_down(&gNetif);
-          }
-          ALOG_R("\n");
-       }
+               default:
+                  ALOG_R("WTF?");
+                  break;
+            }
+            netif_set_link_up(&gNetif);
+         }
+         else {
+            netif_set_link_down(&gNetif);
+         }
+         ALOG_R("\n");
+      }
 
-       if(!bHaveIP && (gEthStatus & ETH_STATUS_LINK_UP)) {
-          if(dhcp_supplied_address(&gNetif)) {
-             bHaveIP = true;
-             ALOG_R("IP address assigned %s\n",ip4addr_ntoa(&gNetif.ip_addr));
-          }
-       }
+      if(!bHaveIP && (gEthStatus & ETH_STATUS_LINK_UP)) {
+         if(dhcp_supplied_address(&gNetif)) {
+            bHaveIP = true;
+            ALOG_R("IP address assigned %s\n",ip4addr_ntoa(&gNetif.ip_addr));
+         }
+      }
 
-       if(gSendWelcome) {
-          gSendWelcome = false;
-          NetPrintf(gVerStr);
-          SendPrompt();
-       }
-       if(gInputReady) {
-          gInputReady = false;
-          LOG("Parsing command '%s'\n",gRxBuf);
-          ParseCmd(gRxBuf);
-          gRxCount = 0;
-          SendPrompt();
-       }
-    }
+      if(gSendWelcome) {
+         gSendWelcome = false;
+         NetPrintf(gVerStr);
+         SendPrompt();
+      }
+      if(gInputReady) {
+         gInputReady = false;
+         LOG("Parsing command '%s'\n",gRxBuf);
+         ParseCmd(gRxBuf);
+         gRxCount = 0;
+         SendPrompt();
+      }
+   }
 
-    return 0;
+   return 0;
 }
 
 void ClearRxFifo()
@@ -1010,6 +1021,10 @@ int MapCmd(char *CmdLine)
          }
          Adr += EraseSize;
          bEmpty = CheckEmpty(Adr,PageSize,EraseSize);
+         if(bWasEmpty == bEmpty && Adr == FlashSize) {
+         // force display if entire flash is erased or in use
+            bEmpty = !bEmpty;
+         }
          if(bWasEmpty != bEmpty) {
          // End of region
             bWasEmpty = bEmpty;
@@ -1050,25 +1065,28 @@ int GetOnOff(char *CmdLine,bool *pOnOff)
 int AutoBootCmd(char *CmdLine)
 {
    int Ret = RESULT_BAD_ARG;  // assume the worse
-   bool On = false;
-   bool AutoBoot;
+   int AutoBoot = 0;
+   bool On;
    char *cp;
+   const char *Mode[] = { "off","on",DelayedStr};
 
    do {
       if(!*CmdLine) {
          Ret = RESULT_OK;
          break;
       }
-      if(GetOnOff(CmdLine,&On)) {
+      if(strcasecmp(CmdLine,DelayedStr) == 0) {
+         AutoBoot = AUTOBOOT_DELAYED;
+      }
+      else if(GetOnOff(CmdLine,(bool *) &AutoBoot)) {
          break;
       }
       Ret = RESULT_OK;
-      AutoBoot = On;
-      AddBoardInfo(TAG_AUTO_BOOT,sizeof(bool),&AutoBoot);
+      AddBoardInfo(TAG_AUTO_BOOT,sizeof(int),&AutoBoot);
    } while(false);
 
    if(Ret == RESULT_OK) {
-      NetPrintf("Autoboot o%s\n",gAutoBoot ? "n":"ff");
+      NetPrintf("Autoboot %s\n",Mode[gAutoBoot]);
    }
 
    return Ret;
@@ -1280,95 +1298,43 @@ int TftpTranserWait(tftp_ldr_internal *p)
    return Ret;
 }
 
-uint32_t GetDataPageOffset()
+// read Pano data block into gTemp, return flash adr of first free word
+uint32_t ParseDataBlock()
 {
-   const FlashInfo_t *p = spi_get_flashinfo();
-   uint32_t DataPageOffset = 0;
-
-   if(p->FlashSize == (8*1024*1024)) {
-   // 8 Mbyte chip
-      DataPageOffset = 0x6c0000;
-   }
-   else if(p->FlashSize == (16*1024*1024)) {
-   // 16 Mbyte chip
-      DataPageOffset = 0x8c0000;
-   }
-   else {
-      ELOG("FlashSize 0x%x\n",p->FlashSize);
-   }
-
-   return DataPageOffset;
-}
-
-// read Pano data block into gTemp, return pointer to first free word
-uint32_t *ParseDataBlock()
-{
-   uint32_t DataPageOffset = GetDataPageOffset();
-   uint32_t *pU32 = NULL;
+   uint32_t DataPageOffset;
+   uint32_t *pU32 = (uint32_t *) gTemp;
    uint32_t Tag;
    uint32_t ValueLen;
    void *pValue;
-   PanoInfoBlock_t *PanoInfo = (PanoInfoBlock_t *) gTemp;
+   const FlashInfo_t *p = spi_get_flashinfo();
+   uint32_t Ret = 0;
 
    do {
-      if(DataPageOffset == 0) {
-         break;
-      }
+      DataPageOffset = p->FlashSize - p->EraseSize;
       spi_read(DataPageOffset,gTemp,sizeof(gTemp));
-      while(PanoInfo->Type != 0xffff) {
-         VLOG("Type 0x%x Register 0x%04x value 0x%x\n",
-              ntohs(PanoInfo->Type),
-              ntohs(PanoInfo->Register),
-              ntohl(PanoInfo->Value));
-         if(PanoInfo->Type == INFO_TYPE_CFG_WR) {
-            switch(PanoInfo->Register) {
-               case CFG_REG_BRD_ID:
-                  gBoardID = ntohl(PanoInfo->Value);
-                  break;
-#if 0 // Can't set MAC without gateware change to set MAC in hardware layer
-               case CFG_REG_MAC_MSB:
-                  gOurMac[0] = (uint8_t) ((PanoInfo->Value >> 16) & 0xff);
-                  gOurMac[1] = (uint8_t) (PanoInfo->Value >> 24);
-                  break;
-               case CFG_REG_MAC_LSB:
-                  memcpy(&gOurMac[2],&PanoInfo->Value,4);
-                  break;
-#endif
 
-               default:
-                  break;
-            }
-         }
-         PanoInfo++;
-      }
-
-      if(gBoardID == 0) {
-      // Not a valid Pano info block, the BoardID is always present
-         break;
-      }
-   // End of Pano info, start of hacker info
-   // <32 bit tag> <32 bit length> <variable length data>...<tag><len><data>...
-   // 
-      pU32 = (uint32_t *) PanoInfo;
-      pU32++;  // Leave terminating 0xffff to keep Pano gateware happy
-      LOG_HEX(pU32,32);
-
+// <32 bit tag> <32 bit length> <variable length data>...<tag><len><data>...
       while((Tag = *pU32) != 0xffffffff) {
-         LOG("Tag %ld Len %ld\n",Tag,pU32[1]);
-
          pU32++;
          ValueLen = *pU32++;
+         pValue = pU32;
+         LOG("Tag %ld Len %ld\n",Tag,ValueLen);
          if((ValueLen & 0x3) != 0) {
          // round up to prevent unaligned accesses
             ValueLen += 4 - (ValueLen & 0x3);
          }
-         pValue = pU32;
-      // Skip to next tag
+      // Skip to the next tag
          pU32 = (uint32_t *) (((uint8_t *) pU32) + ValueLen); 
+
+         if(((char *) pU32) - gTemp > sizeof(gTemp) - sizeof(uint32_t)) {
+         // Invalid length, ignore block
+            pU32 = NULL;
+            break;
+         }
 
          switch(Tag) {
             case TAG_AUTO_BOOT:
-               gAutoBoot = *((bool *) pValue);
+               gAutoBoot = *((int *) pValue);
                break;
 
             case TAG_AUTO_BOOT_ADR:
@@ -1385,33 +1351,50 @@ uint32_t *ParseDataBlock()
       }
    } while(false);
 
-   return pU32;
+   if(pU32 != NULL) {
+      Ret = DataPageOffset + ((char *) pU32 - gTemp);
+   }
+   else {
+   // Not a valid data block, is it empty?
+      if(CheckEmpty(DataPageOffset,p->PageSize,p->EraseSize)) {
+      // block is empty, use it
+         Ret = DataPageOffset;
+      }
+   }
+
+   return Ret;
 }
 
 void AddBoardInfo(Tag_t Tag,size_t Len,void *TagData)
 {
-   uint32_t *pFirstUnused = ParseDataBlock();
-   uint32_t *pU32 = pFirstUnused;
+   uint32_t *pFirstUnused;
+   uint32_t *pU32;
    uint32_t BytesAvailable;
-   uint32_t WriteOffset;
+   uint32_t WriteOffset = ParseDataBlock();
+   uint32_t BufOffset;
    uint32_t EntryLen = (sizeof(uint32_t) * 2) + Len;
+   const FlashInfo_t *p = spi_get_flashinfo();
 
-   if(pU32 != NULL) {
-      WriteOffset = (((char *) pU32) - gTemp);
-      BytesAvailable = sizeof(gTemp) - WriteOffset;
+   if(WriteOffset != 0) {
+      BufOffset = WriteOffset - (p->FlashSize - p->EraseSize);
+      pFirstUnused = pU32 = (uint32_t *) &gTemp[BufOffset];
+      BytesAvailable = sizeof(gTemp) - BufOffset;
       BytesAvailable -= EntryLen;
       if(BytesAvailable >= sizeof(uint32_t)) {
       // The new data fits, write it
          *pU32++ = (uint32_t) Tag;
          *pU32++ = (uint32_t) Len;
          memcpy(pU32,TagData,Len);
-         // LOG("Write %d bytes of data @ 0x%x\n",EntryLen,WriteOffset);
          // LOG_HEX(gTemp,WriteOffset + EntryLen);
-         WriteOffset += GetDataPageOffset();
-
+         LOG("Write %d bytes of data @ 0x%x\n",EntryLen,WriteOffset);
          spi_write(WriteOffset,(uint8_t *)pFirstUnused,EntryLen);
+         ParseDataBlock(); // reload with updated data
       }
-      ParseDataBlock(); // reload updated data
    }
+}
+
+int ButtonPressed()
+{
+   return (REG_RD(GPIO_BASE + GPIO_INPUT) & GPIO_BIT_PANO_BUTTON) ? 0 : 1;
 }
 
