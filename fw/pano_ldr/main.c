@@ -109,7 +109,7 @@ typedef struct {
 #define AUTOBOOT_DELAYED   2
 
 // How long to wait for button press in milliseconds
-#define AUTO_BOOT_DELAY    3000
+#define AUTO_BOOT_DELAY    10000
 
 NetPrintInternal_t gNetPrint;
 struct tcp_pcb *gTcpCon;
@@ -165,7 +165,7 @@ void AddBoardInfo(Tag_t Tag,size_t Len,void *TagData);
 int ButtonPressed(void);
 void ReBoot(uint32_t SpiAdr);
 
-const char gVerStr[] = "Pano LDR v0.02 compiled " __DATE__ " " __TIME__ "\r\n";
+const char gVerStr[] = "Pano LDR v0.03 compiled " __DATE__ " " __TIME__ "\r\n";
 
 int AutoBootCmd(char *CmdLine);
 int AutoEraseCmd(char *CmdLine);
@@ -230,6 +230,7 @@ int main(int argc, char *argv[])
       ReBoot(gAutoBootAdr);
    }
    else if(gAutoBoot == AUTOBOOT_DELAYED) {
+      while(ButtonPressed());
       while(!ButtonPressed()) {
          if(timer_now() > AUTO_BOOT_DELAY) {
             ReBoot(gAutoBootAdr);
@@ -1123,18 +1124,20 @@ int BootAdrCmd(char *CmdLine)
    int On;
    uint32_t AutoBootAdr;
 
-   if(!*CmdLine) {
-      NetPrintf("Autoboot @0x%x\n",gAutoBootAdr);
+   if(*CmdLine) {
+      if(ConvertValue(&CmdLine,&AutoBootAdr)) {
+         Ret = RESULT_BAD_ARG;
+      }
+      else {
+         AddBoardInfo(TAG_AUTO_BOOT_ADR,sizeof(AutoBootAdr),&AutoBootAdr);
+      }
    }
-   else if(ConvertValue(&CmdLine,&AutoBootAdr)) {
-      Ret = RESULT_BAD_ARG;
-   }
-   else {
-      AddBoardInfo(TAG_AUTO_BOOT_ADR,sizeof(AutoBootAdr),&AutoBootAdr);
+      
+   if(Ret == RESULT_OK) {
+      NetPrintf("Bootadr 0x%x\n",gAutoBootAdr);
    }
    return Ret;
 }
-
 
 int RebootCmd(char *CmdLine)
 {

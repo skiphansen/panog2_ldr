@@ -513,6 +513,17 @@ on an erase boundary
 | 126 | 0x7e0000 -> 0x7effff |
 | 127 | 0x7f0000 -> 0x7fffff |
 
+# Flash Partitioning
+
+Once pano_mon has been installed it is possible to repartition flash to make 
+it more efficient and convenient.  
+
+Using bit stream compression is an easy way to save flash space and all it
+takes setting a bitgen configuration varaible.
+
+For example a compressed bit stream of pano_ldr for rev B occupies ten flash 
+sectors rather than 17.  On the rev C it occupies 
+
 # Building everything from sources
 
 **NB:** While it may be possible to use Windows for development I haven't 
