@@ -106,7 +106,7 @@ The autoboot command displays or sets the autoboot mode.
 | - | - |
 | Off | Pano_ldr initializes the network and waits for a connection. |
 | On | If the Pano button is not pressed pano_ldr initializes the network and waits for a connection. |
-| Delayed | Pano_ldr waits for the Pano button to be pressed for 3 seconds.  If the Pano button is not pressed then it will initialize the network and wait for a connection. |
+| Delayed | Pano_ldr waits for the Pano button to be pressed for 3 seconds.  If the Pano button is pressed then it will initialize the network and wait for a connection. |
 
 For example:
 ```
@@ -342,11 +342,11 @@ a JTAG programmer connected.
 
 ## Installation without a JTAG programmer
 
-A script that uses Pano update utilities which have been patched by the 
-[pano_progfpga](https://github.com/skiphansen/pano_progfpga) project is
-provide to install pano_ldr of the network.  The Pano update utilities are 32 
-bit Linux x86 programs that can be run on  any OS that can run 32 bit Linux 
-binaries.  
+A script that uses patched Pano update utilities is provide to install pano_ldr 
+over the network.  
+
+The Pano update utilities are 32  bit Linux x86 programs that can be run on
+ny OS that can run 32 bit Linux binaries.  
 
 You should be able to run these programs on a modern X86 Linux by installing
 [32 bit libraries](https://linuxconfig.org/unable-to-find-a-suitable-destination-to-install-32-bit-compatibility-libraries-on-ubuntu-18-04-bionic-beaver-linux).
@@ -369,13 +369,10 @@ The installation procedure is:
 
 Connect the Pano to your LAN then power it on.  
 
-Pano2:
+When installing on Pano G2 Wait for the Pano button to turn amber and stop 
+flashing before running the install script.  
 
-Wait for the Pano button to turn amber and stop flashing before running the 
-install script.  
-
-DZ22-2:
-Wait until the power switch blinks amber slowly.
+When installing on a DZ22-2 Wait until the power switch blinks amber slowly.
 
 It takes about 6 minutes to install pano_ldr on a G2 Rev B and about 4 minutes
 on a Rev C.
