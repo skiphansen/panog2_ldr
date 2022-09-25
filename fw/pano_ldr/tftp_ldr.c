@@ -127,7 +127,7 @@ static int tftp_write(void *handle, struct pbuf *pBuf)
          case TFTP_TYPE_FLASH: {
             const FlashInfo_t *pInfo = spi_get_flashinfo();
             uint32_t EraseSize = pInfo->EraseSize;
-            uint32_t LastAdr = Adr + BufLen;
+            uint32_t LastAdr = Adr + BufLen - 1;
             uint32_t EraseAdr;
             uint32_t EraseEnd = LastAdr - (LastAdr % EraseSize);
 
