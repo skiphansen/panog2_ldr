@@ -171,6 +171,7 @@ int AutoBootCmd(char *CmdLine);
 int AutoEraseCmd(char *CmdLine);
 int BootAdrCmd(char *CmdLine);
 int FlashCmd(char *CmdLine);
+int ExitCmd(char *CmdLine);
 int RebootCmd(char *CmdLine);
 int DumpCmd(char *CmdLine);
 int EraseCmd(char *CmdLine);
@@ -187,6 +188,7 @@ const CommandTable_t gCmdTable[] = {
    { "erase    ",  "<start adr> <end adr>",NULL,EraseCmd},
    { "flash    ",  "<filename> <flash adr>",NULL,FlashCmd},
    { "map      ",  "Display blank regions in flash",NULL,MapCmd},
+   { "exit     ",  "Close connection",NULL,ExitCmd},
    { "reboot   ",  "<flash adr>",NULL,RebootCmd},
    { "save     ",  "<filename> <flash adr> <length>",NULL,SaveCmd},
    { "tftp     ",  "<IP adr of tftp server>",NULL,TftpCmd},
@@ -244,6 +246,10 @@ int main(int argc, char *argv[])
    ClearRxFifo();
 
    for(; ; ) {
+      if(gAutoBoot == AUTOBOOT_OFF && ButtonPressed()) {
+         // auto boot now
+         ReBoot(gAutoBootAdr);
+      }
       UpdateLEDs();
       pano_netif_poll();
       NewEthStatus = ETH_STATUS & (ETH_STATUS_LINK_UP | ETH_STATUS_LINK_SPEED);
@@ -1139,6 +1145,15 @@ int BootAdrCmd(char *CmdLine)
    return Ret;
 }
 
+int ExitCmd(char *CmdLine)
+{
+   NetWaitBufEmpty();
+   tcp_close(gTcpCon);
+   gTcpCon = NULL;
+
+   return RESULT_OK;
+}
+
 int RebootCmd(char *CmdLine)
 {
    int Ret;
@@ -1148,6 +1163,8 @@ int RebootCmd(char *CmdLine)
    if((Ret = GetAdrAndLen(&cp,&Adr,NULL)) == RESULT_OK) {
       NetPrintf("Booting bitstream @ 0x%x\n");
       NetWaitBufEmpty();
+      tcp_close(gTcpCon);
+      gTcpCon = NULL;
       ReBoot(Adr);
    }
 
