@@ -377,6 +377,9 @@ When installing on a DZ22-2 Wait until the power switch blinks amber slowly.
 It takes about 6 minutes to install pano_ldr on a G2 Rev B and about 4 minutes
 on a Rev C.
 
+**NB:** If installation is takes considerably longer than expected there could firewall issues  **EVEN** on 
+a local network.  See [ticket #5](https://github.com/skiphansen/panog2_ldr/issues/5) for details.
+
 ```
 skip@Dell-7040:~/pano/working/panog2_ldr$ ./install_pano_ldr.sh 
 Pano IP: 192.168.123.118
