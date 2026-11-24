@@ -117,6 +117,8 @@ struct tcp_pcb *gTcpCon;
 #define REG_WR(reg, wr_data)       *((volatile uint32_t *)(reg)) = (wr_data)
 #define REG_RD(reg)                *((volatile uint32_t *)(reg))
 err_t TcpRecv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err);
+err_t CloseCon(struct tcp_pcb *tpcb);
+void EchoPuts(char *String);
 void TcpError(void *arg, err_t err);
 err_t TcpPoll(void *arg, struct tcp_pcb *tpcb);
 err_t TcpSent(void *arg, struct tcp_pcb *tpcb, u16_t len);
@@ -459,6 +461,7 @@ err_t pano_netif_output(struct netif *netif, struct pbuf *p)
 void pano_netif_poll()
 {
    struct pbuf *p = NULL;
+   struct pbuf *q;
    u16_t len;
    ssize_t readlen;
    uint16_t Count;
@@ -466,10 +469,12 @@ void pano_netif_poll()
    int i;
 
    if(!(ETH_STATUS & ETH_STATUS_RXEMPTY)) do {
-      Count = (ETH_RX() << 8) + ETH_RX();
+      Count = ETH_RX() << 8;
+      Count += ETH_RX();
       if(Count == 0 || Count > MAX_ETH_FRAME_LEN) {
          ELOG("Invalid rx frame length %d\n",Count);
          ClearRxFifo();
+         break;
       }
       len = (u16_t)Count;
       MIB2_STATS_NETIF_ADD(&gNetif,ifinoctets,len);
@@ -477,13 +482,13 @@ void pano_netif_poll()
       /* We allocate a pbuf chain of pbufs from the pool. */
       p = pbuf_alloc(PBUF_RAW,len,PBUF_POOL);
       if(p != NULL) {
-         cp = (uint8_t *) p->payload;
-         *cp = ETH_RX();
-         cp++;
-         for(i = 1; i < Count; i++) {
-            *cp++ = ETH_RX();
+      // A frame longer than PBUF_POOL_BUFSIZE is spread over several pbufs
+         for(q = p; q != NULL; q = q->next) {
+            cp = (uint8_t *) q->payload;
+            for(i = 0; i < q->len; i++) {
+               *cp++ = ETH_RX();
+            }
          }
-         cp = (uint8_t *) p->payload;
 
 #ifdef LOG_RAW_ETH
          LOG_R("Rx #%d: Read %d (0x%x) bytes from Rx Fifo:\n",gRxCount,Count,Count);
@@ -535,10 +540,13 @@ err_t TcpAccept(void *arg, struct tcp_pcb *newpcb, err_t err)
    VLOG("Called, err: %d, newpcb: %p\n",err,newpcb);
    if(err == ERR_OK && newpcb != NULL) {
       if(gTcpCon != NULL) {
+      // The new connection replaces the old one, its client may be long gone
          ELOG("gTcpCon not NULL\n");
+         tcp_abort(gTcpCon);
+         gTcpCon = NULL;
       }
       gTcpCon = newpcb;
-      tcp_arg(newpcb,NULL);
+      tcp_arg(newpcb,newpcb);
       tcp_recv(newpcb,TcpRecv);
       tcp_err(newpcb,TcpError);
       tcp_poll(newpcb,TcpPoll,0);
@@ -587,10 +595,10 @@ err_t TcpRecv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
             // back space or delete
                if(gRxCount > 0) {
                   gRxCount--;
-                  NetPuts("\b \b"); // Send back space, space, back space
+                  EchoPuts("\b \b"); // Send back space, space, back space
                }
                else {
-                  NetPuts("\a"); // beep
+                  EchoPuts("\a"); // beep
                }
             }
             else if(*cp == '\r') {
@@ -613,7 +621,40 @@ err_t TcpRecv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
    }
    else {
       LOG("connection closed\n");
+      return CloseCon(tpcb);
+   }
+   return ERR_OK;
+}
+
+// Echo from a lwIP callback: NetPuts() polls the network when the buffer is
+// full, which would reenter lwIP. Drop the echo instead.
+void EchoPuts(char *String)
+{
+   if(gNetPrint.Len + strlen(String) <= sizeof(gNetPrint.PrintBuf)) {
+      NetPuts(String);
+   }
+}
+
+// Close a connection and make sure lwIP doesn't call us for it any more.
+// The return value is what a tcp_recv callback must return.
+err_t CloseCon(struct tcp_pcb *tpcb)
+{
+   if(tpcb == NULL) {
+   // Already closed or reset by the client
+      return ERR_OK;
+   }
+   if(gTcpCon == tpcb) {
       gTcpCon = NULL;
+   }
+   tcp_arg(tpcb,NULL);
+   tcp_recv(tpcb,NULL);
+   tcp_sent(tpcb,NULL);
+   tcp_err(tpcb,NULL);
+   tcp_poll(tpcb,NULL,0);
+   if(tcp_close(tpcb) != ERR_OK) {
+   // No memory for the FIN, free the pcb with a RST instead
+      tcp_abort(tpcb);
+      return ERR_ABRT;
    }
    return ERR_OK;
 }
@@ -621,6 +662,10 @@ err_t TcpRecv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
 void TcpError(void *arg, err_t err)
 {
    ELOG("Called, err: %d\n",err);
+// lwIP has already freed the pcb
+   if(gTcpCon == arg) {
+      gTcpCon = NULL;
+   }
 }
 
 err_t TcpPoll(void *arg, struct tcp_pcb *tpcb)
@@ -649,6 +694,7 @@ err_t TcpSent(void *arg, struct tcp_pcb *tpcb, u16_t len)
       NetPrintFillPcb(tpcb);
    }
    VLOG_R("\n");
+   return ERR_OK;
 }
 
 int NetPrintf(const char *Format, ...)
@@ -1148,8 +1194,7 @@ int BootAdrCmd(char *CmdLine)
 int ExitCmd(char *CmdLine)
 {
    NetWaitBufEmpty();
-   tcp_close(gTcpCon);
-   gTcpCon = NULL;
+   CloseCon(gTcpCon);
 
    return RESULT_OK;
 }
@@ -1161,10 +1206,9 @@ int RebootCmd(char *CmdLine)
    char *cp = CmdLine;
    
    if((Ret = GetAdrAndLen(&cp,&Adr,NULL)) == RESULT_OK) {
-      NetPrintf("Booting bitstream @ 0x%x\n");
+      NetPrintf("Booting bitstream @ 0x%x\n",Adr);
       NetWaitBufEmpty();
-      tcp_close(gTcpCon);
-      gTcpCon = NULL;
+      CloseCon(gTcpCon);
       ReBoot(Adr);
    }
 
